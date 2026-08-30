@@ -19,6 +19,10 @@
 4. Then: `validate.ps1 -Project C:\sf2-scout` → `release.ps1` → deploy →
    ask for the ear pass.
 
+## Git
+
+- `main` @ e434399 "Initial commit: SF2 Scout kickoff (phase 0)" — pushed to `mannyzagri/sf2-scout` 2026-08-30.
+
 ## Artefacts of this session
 
 - `build\Sf2Scout_artefacts\Release\VST3\SF2 Scout.vst3`
