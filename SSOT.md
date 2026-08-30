@@ -37,6 +37,6 @@ what this project owns.
 
 Any role may propose; only the human enacts. Unsigned change = defect.
 
-    Ratified-by: <UNSIGNED — awaiting operator>
+    Ratified-by: Menashe Zagri
     Date: 2026-08-30
     Change: manifest created for sf2-scout (drafted by vm-claude at kickoff).

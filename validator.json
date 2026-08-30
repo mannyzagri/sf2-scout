@@ -7,7 +7,7 @@
   "handoff": {
     "manifest": "docs\\handoff-gui-v1\\handoff-manifest.json",
     "root": "docs\\handoff-gui-v1",
-    "spec": { "file": "docs\\handoff-gui-v1\\handoff-manifest.json", "block": "sf2scout-params" },
+    "spec": { "file": "docs\\PARAMS.md", "block": "sf2scout-params" },
     "guiPage": "main"
   },
 
