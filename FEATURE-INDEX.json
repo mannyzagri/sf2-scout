@@ -1,0 +1,20 @@
+{
+  "_readme": "Feature -> file + symbol map. Check here before grepping; update on every move. Lines are approximate.",
+  "sf2 parsing (TSF wrapper, shdr walk, zone table)": { "file": "Source/engine/SoundFontBank.cpp", "symbols": ["readShdr", "shdrForRegion", "SoundFontBank::load"] },
+  "zone lookup for a key/velocity": { "file": "Source/engine/SoundFontBank.cpp", "symbols": ["SoundFontBank::findZones", "SoundFontBank::zoneForKey"] },
+  "voice pool / play modes / release fade / stealing": { "file": "Source/engine/ScoutEngine.cpp", "symbols": ["ScoutEngine::startVoice", "ScoutEngine::renderVoice", "ScoutEngine::allocateVoice", "ScoutEngine::noteOff"] },
+  "pitch math (root, transpose, tune, keytrack, bend)": { "file": "Source/engine/ScoutEngine.cpp", "symbols": ["ScoutEngine::startVoice"] },
+  "lock-free bank swap": { "file": "Source/engine/ScoutEngine.cpp", "symbols": ["ScoutEngine::setBank", "ScoutEngine::consumePendingBank", "ScoutEngine::takeRetiredBank"] },
+  "readout publish (last note, playhead, voice count)": { "file": "Source/engine/ScoutEngine.cpp", "symbols": ["ScoutEngine::noteOn", "ScoutEngine::process", "ScoutEngine::lastNote"] },
+  "note names + ms formatting": { "file": "Source/engine/NoteNames.h", "symbols": ["noteName", "formatMs"] },
+  "parameters (ids, layout)": { "file": "Source/PluginProcessor.h", "symbols": ["ParamId", "ScoutProcessor::createLayout"] },
+  "MIDI handling / channel filter / UI audition fifo": { "file": "Source/PluginProcessor.cpp", "symbols": ["ScoutProcessor::processBlock", "ScoutProcessor::auditionNote"] },
+  "file loading + state save/restore": { "file": "Source/PluginProcessor.cpp", "symbols": ["ScoutProcessor::loadSoundFont", "ScoutProcessor::getStateInformation", "ScoutProcessor::setStateInformation"] },
+  "design tokens (colours, fonts)": { "file": "Source/ui/Palette.h", "symbols": ["col", "sans", "mono", "smallLabel"] },
+  "buttons, mode switch, slider/combo looks": { "file": "Source/ui/Widgets.h", "symbols": ["FlatButton", "SegmentSwitch", "MasterSliderLook", "ChipComboLook"] },
+  "info readout + loop bar": { "file": "Source/ui/Readout.h", "symbols": ["InfoReadout::paint", "InfoReadout::paintBar"] },
+  "zone map strip + labels": { "file": "Source/ui/Readout.h", "symbols": ["ZoneMapStrip", "ZoneLabelsRow"] },
+  "editor layout / wiring / polling": { "file": "Source/PluginEditor.cpp", "symbols": ["ScoutEditor::resized", "ScoutEditor::paint", "ScoutEditor::refreshReadout", "ScoutEditor::timerCallback"] },
+  "drag-drop + file chooser": { "file": "Source/PluginEditor.cpp", "symbols": ["ScoutEditor::filesDropped", "ScoutEditor::chooseFile"] },
+  "engine harness (in-memory SF2 writer)": { "file": "tests/test_engine.cpp", "symbols": ["buildTestSf2", "main"] }
+}

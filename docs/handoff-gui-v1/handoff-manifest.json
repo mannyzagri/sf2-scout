@@ -1,0 +1,29 @@
+{
+  "_readme": "DERIVED by vm-claude 2026-08-30 from the gui-claude bundle 'SF2 Scout GUI mockup.zip' (README.md + SF2 Scout GUI.dc.html). The bundle shipped without a manifest; a native one is requested for v2. Prose in README.md stays the design intent; this file is the part that gets machine-checked.",
+  "provenance": "derived",
+  "canvas": { "width": 920, "height": 522, "_note": "README draws ~700 (preview frame); D-3 in CLAUDE.md uses the row sum" },
+  "assets": [],
+  "controls": [
+    { "id": "masterGain", "kind": "continuous", "defaultNorm": 0.72, "widget": "footer MASTER slider 200x6", "readout": "20*log10(gain) dB, 1 decimal" },
+    { "id": "mode", "kind": "stepped", "steps": ["AS-AUTHORED", "LOOP-ONLY"], "defaultStep": 0, "widget": "header 2-segment switch" },
+    { "id": "midiChannel", "kind": "stepped", "steps": ["OMNI", "CH 1", "CH 2", "CH 3", "CH 4", "CH 5", "CH 6", "CH 7", "CH 8", "CH 9", "CH 10", "CH 11", "CH 12", "CH 13", "CH 14", "CH 15", "CH 16"], "defaultStep": 0, "widget": "footer MIDI IN ComboBox" }
+  ],
+  "actions": [
+    { "id": "load", "widget": "header LOAD button + whole-window .sf2 drop target" },
+    { "id": "prevPreset", "widget": "preset list ‹ stepper (wraps)" },
+    { "id": "nextPreset", "widget": "preset list › stepper (wraps)" },
+    { "id": "selectPreset", "widget": "preset list row click" },
+    { "id": "auditionKey", "widget": "zone strip cell click (velocity 100)" }
+  ],
+  "state": ["presetIndex", "lastNote", "mode", "masterGain", "midiChannelFilter", "activeVoiceCount"],
+  "declaredGaps": [
+    "No manifest shipped with the bundle (this one is derived).",
+    "Fonts are Google-hosted IBM Plex in the prototype; substitution rule used (D-2).",
+    "Playhead in the mock is a free-running animation; the plugin tracks the real read pointer."
+  ],
+  "sf2scout-params": {
+    "masterGain": { "type": "float", "min": 0, "max": 1, "default": 0.72 },
+    "mode": { "type": "choice", "choices": ["AS-AUTHORED", "LOOP-ONLY"], "default": 0 },
+    "midiChannel": { "type": "choice", "count": 17, "default": 0 }
+  }
+}

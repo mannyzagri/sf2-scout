@@ -1,0 +1,22 @@
+build/
+build-*/
+deps/
+scratch/
+*.exe
+*.obj
+*.vst3/
+.validator/
+.DS_Store
+
+# Claude skills + agents are junctions into C:/code-bank (canonical there),
+# created by C:\code-bank\tools\bootstrap-project.ps1 -- never commit copies.
+.claude/skills/
+.claude/agents/
+
+# Third-party SoundFonts are the user's; never commit one (docs/DSP.md NON-features).
+*.sf2
+*.sf3
+*.SF2
+
+# build agent log
+build_output.log
