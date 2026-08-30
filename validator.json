@@ -17,7 +17,23 @@
         "name": "test_engine",
         "compile": "cl /nologo /EHsc /O2 /std:c++17 /W3 tests\\test_engine.cpp Source\\engine\\SoundFontBank.cpp Source\\engine\\ScoutEngine.cpp /Fo:scratch\\ /Fe:scratch\\test_engine.exe",
         "run": "scratch\\test_engine.exe",
-        "expect": ["[load]", "[authored]", "[looponly]", "[pitch]", "[release]", "[malformed]", "[swap]", "checks: 58, failed: 0", "ALL CHECKS PASSED"]
+        "expect": [
+          "ALL CHECKS PASSED",
+          "0 failures",
+          "112 checks, 0 failures",
+          "[load]",
+          "[authored]",
+          "[looponly]",
+          "[pitch]",
+          "[release]",
+          "[malformed]",
+          "[swap]",
+          "[hostile-pitch]",
+          "[seqlock]",
+          "[sample-id]",
+          "[stereo-pair]",
+          "[pool-bound]"
+        ]
       }
     ]
   },

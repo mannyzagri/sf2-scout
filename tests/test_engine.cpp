@@ -54,12 +54,40 @@ struct Buf
     }
 };
 
-struct Sample { const char* name; std::vector<int16_t> pcm; uint32_t loopStart, loopEnd; uint32_t rate; uint8_t root; };
+struct Sample
+{
+    const char* name; std::vector<int16_t> pcm; uint32_t loopStart, loopEnd; uint32_t rate; uint8_t root;
+    uint16_t sampleType = 1;     // shdr.sampleType: 1 mono, 2 right, 4 left (F11 stereo-pair test)
+    uint16_t sampleLink = 0;     // shdr.sampleLink: paired sample index for linked stereo halves
+    int64_t  endOverride = -1;  // F7 pool-bound test: if >= 0, write this as shdr.end instead of the
+                                  // real PCM length -- a header that lies about how much data follows it
+};
 
-// generator opcodes we use
-enum { GEN_KEYRANGE = 43, GEN_VELRANGE = 44, GEN_SAMPLEMODES = 54, GEN_ROOTKEY = 58, GEN_SAMPLEID = 53, GEN_INSTRUMENT = 41 };
+// generator opcodes we use (SF2 spec section 8.1.2)
+enum {
+    GEN_STARTADDRSOFFSET = 0,
+    GEN_INSTRUMENT = 41, GEN_KEYRANGE = 43, GEN_VELRANGE = 44,
+    GEN_COARSETUNE = 51, GEN_FINETUNE = 52, GEN_SAMPLEID = 53, GEN_SAMPLEMODES = 54,
+    GEN_SCALETUNING = 56, GEN_ROOTKEY = 58
+};
 
-std::vector<uint8_t> buildTestSf2 (std::vector<Sample>& samples)
+// One instrument-zone generator: {opcode, raw 2-byte amount}. A GEN_KEYRANGE/
+// GEN_VELRANGE amount packs lo in the low byte and hi in the high byte (SF2's
+// own range encoding); every other opcode's amount is just its int16/uint16
+// bit pattern, so a single uint16_t representation covers all of them and a
+// zone becomes DATA -- a vector of these -- instead of hand-counted byte
+// offsets into igen/ibag (the old writer's index arithmetic F6/F7/F11's tests
+// would otherwise have made unreadable).
+struct GenOp { uint16_t oper; uint16_t amount; };
+using ZoneDesc = std::vector<GenOp>;
+GenOp keyRangeOp (int lo, int hi) { return { (uint16_t) GEN_KEYRANGE, (uint16_t) ((uint8_t) lo | ((unsigned) (uint8_t) hi << 8)) }; }
+GenOp velRangeOp (int lo, int hi) { return { (uint16_t) GEN_VELRANGE, (uint16_t) ((uint8_t) lo | ((unsigned) (uint8_t) hi << 8)) }; }
+GenOp genOp (uint16_t oper, int32_t value) { return { oper, (uint16_t) (int16_t) value }; }
+
+// General SF2 writer: any sample set, any zone list (all zones in ONE
+// instrument, ONE preset "bank 0 program 0"). Adding a zone or a generator to
+// a test is now a data literal, not new index arithmetic.
+std::vector<uint8_t> buildSf2 (std::vector<Sample>& samples, const std::vector<ZoneDesc>& zones, const char* presetName = "Scout Test")
 {
     // --- sdta: concatenated PCM with 46 zero guard samples after each
     Buf smpl; std::vector<uint32_t> starts, ends;
@@ -74,39 +102,39 @@ std::vector<uint8_t> buildTestSf2 (std::vector<Sample>& samples)
 
     // --- pdta
     Buf phdr, pbag, pmod, pgen, inst, ibag, imod, igen, shdr;
-    // one preset "Scout Test", bank 0 program 0, one pbag pointing to instrument 0
-    phdr.name20 ("Scout Test"); phdr.u16 (0); phdr.u16 (0); phdr.u16 (0); phdr.u32 (0); phdr.u32 (0); phdr.u32 (0);
-    phdr.name20 ("EOP");        phdr.u16 (0); phdr.u16 (0); phdr.u16 (1); phdr.u32 (0); phdr.u32 (0); phdr.u32 (0);
+    // one preset, bank 0 program 0, one pbag pointing to instrument 0
+    phdr.name20 (presetName); phdr.u16 (0); phdr.u16 (0); phdr.u16 (0); phdr.u32 (0); phdr.u32 (0); phdr.u32 (0);
+    phdr.name20 ("EOP");      phdr.u16 (0); phdr.u16 (0); phdr.u16 (1); phdr.u32 (0); phdr.u32 (0); phdr.u32 (0);
     pbag.u16 (0); pbag.u16 (0);   // bag 0: gens start 0
     pbag.u16 (1); pbag.u16 (0);   // terminal
     pgen.u16 (GEN_INSTRUMENT); pgen.u16 (0);
     pgen.u16 (0); pgen.u16 (0);   // terminal
     pmod.u16 (0); pmod.u16 (0); pmod.i16 (0); pmod.u16 (0); pmod.u16 (0); // terminal only
 
-    // one instrument, two zones
+    // one instrument, N zones (data-driven -- see ZoneDesc above)
     inst.name20 ("ScoutInst"); inst.u16 (0);
-    inst.name20 ("EOI");       inst.u16 (2);
-    // zone 0: keys 0-71, looped sample 0, root from shdr
-    ibag.u16 (0); ibag.u16 (0);
-    // zone 1: keys 72-127, one-shot sample 1
-    ibag.u16 (3); ibag.u16 (0);
-    ibag.u16 (6); ibag.u16 (0);   // terminal
-    igen.u16 (GEN_KEYRANGE); igen.u8 (0);  igen.u8 (71);
-    igen.u16 (GEN_SAMPLEMODES); igen.u16 (1);
-    igen.u16 (GEN_SAMPLEID); igen.u16 (0);
-    igen.u16 (GEN_KEYRANGE); igen.u8 (72); igen.u8 (127);
-    igen.u16 (GEN_SAMPLEMODES); igen.u16 (0);
-    igen.u16 (GEN_SAMPLEID); igen.u16 (1);
-    igen.u16 (0); igen.u16 (0);   // terminal
+    inst.name20 ("EOI");       inst.u16 ((uint16_t) zones.size());
+    uint16_t genIdx = 0;
+    for (auto& z : zones)
+    {
+        ibag.u16 (genIdx); ibag.u16 (0);
+        for (auto& g : z) { igen.u16 (g.oper); igen.u16 (g.amount); }
+        genIdx = (uint16_t) (genIdx + z.size());
+    }
+    ibag.u16 (genIdx); ibag.u16 (0);   // terminal
+    igen.u16 (0); igen.u16 (0);        // terminal
     imod.u16 (0); imod.u16 (0); imod.i16 (0); imod.u16 (0); imod.u16 (0);
 
     for (size_t i = 0; i < samples.size(); ++i)
     {
         auto& s = samples[i];
+        // F7: endOverride lets a test write a shdr.end that lies past the real
+        // PCM this sample owns, to prove TSF's clamp (and ours) hold anyway.
+        const uint32_t rawEnd = s.endOverride >= 0 ? (starts[i] + (uint32_t) s.endOverride) : ends[i];
         shdr.name20 (s.name);
-        shdr.u32 (starts[i]); shdr.u32 (ends[i]);
+        shdr.u32 (starts[i]); shdr.u32 (rawEnd);
         shdr.u32 (starts[i] + s.loopStart); shdr.u32 (starts[i] + s.loopEnd);
-        shdr.u32 (s.rate); shdr.u8 (s.root); shdr.u8 (0); shdr.u16 (0); shdr.u16 (1);
+        shdr.u32 (s.rate); shdr.u8 (s.root); shdr.u8 (0); shdr.u16 (s.sampleLink); shdr.u16 (s.sampleType);
     }
     shdr.name20 ("EOS"); for (int i = 0; i < 5; ++i) shdr.u32 (0); shdr.u8 (0); shdr.u8 (0); shdr.u16 (0); shdr.u16 (0);
 
@@ -124,6 +152,17 @@ std::vector<uint8_t> buildTestSf2 (std::vector<Sample>& samples)
     riffBody.list ("INFO", info); riffBody.list ("sdta", sdtaBody); riffBody.list ("pdta", pdtaBody);
     Buf file; file.chunk ("RIFF", riffBody);
     return file.b;
+}
+
+// The original two-zone layout ([load]..[swap] were all written against it),
+// now expressed as data rather than hand-counted igen/ibag indices.
+std::vector<uint8_t> buildTestSf2 (std::vector<Sample>& samples)
+{
+    std::vector<ZoneDesc> zones = {
+        { keyRangeOp (0, 71),   genOp (GEN_SAMPLEMODES, 1), genOp (GEN_SAMPLEID, 0) },   // keys 0-71, looped sample 0
+        { keyRangeOp (72, 127), genOp (GEN_SAMPLEMODES, 0), genOp (GEN_SAMPLEID, 1) },   // keys 72-127, one-shot sample 1
+    };
+    return buildSf2 (samples, zones);
 }
 
 std::vector<int16_t> sine (int len, double periodSamples, double amp = 0.5)
@@ -220,7 +259,9 @@ int main()
         CHECK (e.activeVoiceCount() == 0);                                    // played through once, freed
         CHECK (out[2050] == 0.0f);
         auto ln = e.lastNote();
-        CHECK (ln.note == 72 && ln.zoneIndex == 1 && ln.velocity == 127 && ln.sequence == 1);
+        // F5: lastSeq_ is a seqlock now -- it advances by 2 per note-on
+        // (odd mid-write, even once published), not 1. See ScoutEngine.h.
+        CHECK (ln.note == 72 && ln.zoneIndex == 1 && ln.velocity == 127 && ln.sequence == 2);
 
         // looped zone at root: sustains indefinitely, playhead stays inside the loop
         e.noteOn (60, 100);
@@ -372,7 +413,241 @@ int main()
         CHECK (e.activeVoiceCount() == 1);
     }
 
-    std::printf ("checks: %d, failed: %d\n", g_checks, g_failed);
+    SECTION ("hostile-pitch");
+    {
+        // A zone whose generator VALUES are individually legal (SF2 allows
+        // CoarseTune up to +-120 and ScaleTuning up to 1200) but whose COMBINED
+        // effect at an extreme note is not: TSF does not clamp either of these
+        // two fields on merge (genMetas rows 51 and 56 in tsf.h carry no
+        // _GEN_LIMIT_MASK), so nothing upstream of startVoice's pitch formula
+        // stops it. Before F1, note+transpose=247, keytrack=1200% would compute
+        // an exponent of 2^187 -- baseStep would be +inf/NaN, and renderVoice's
+        // old `while (pos >= loopEnd) pos -= length` would then spin the audio
+        // thread forever trying to walk an infinite pos back into the loop.
+        std::vector<Sample> hsamp = { { "HSample", sine (2000, 37.0), 100, 1900, 44100, 60 } };
+        std::vector<ZoneDesc> hzones = {
+            { keyRangeOp (0, 63),   genOp (GEN_SAMPLEMODES, 1), genOp (GEN_SAMPLEID, 0) },
+            { keyRangeOp (64, 126), genOp (GEN_SAMPLEMODES, 0), genOp (GEN_SAMPLEID, 0) },
+            // the third, hostile zone: legal-per-spec boundary values, note 127.
+            // GEN_SAMPLEID must come LAST: tsf_load_presets resolves and pushes
+            // the region the instant it sees SAMPLEID, so any generator listed
+            // after it in the same zone would be silently dropped.
+            { keyRangeOp (127, 127), genOp (GEN_SAMPLEMODES, 1),
+              genOp (GEN_SCALETUNING, 1200), genOp (GEN_COARSETUNE, 120), genOp (GEN_SAMPLEID, 0) },
+        };
+        std::vector<uint8_t> hfile = buildSf2 (hsamp, hzones);
+        std::string herr; auto hbank = SoundFontBank::load (hfile.data(), hfile.size(), herr);
+        CHECK (hbank != nullptr);
+
+        ScoutEngine e;
+        e.prepare (44100.0);
+        e.setBank (hbank.release());
+        e.setPreset (0);
+        e.noteOn (127, 127);
+        auto out = render (e, 4096);          // must return -- proves no spin/hang
+        CHECK (e.activeVoiceCount() <= ScoutEngine::kMaxVoices);
+        // Not possible to inject a NaN from the file itself (every generator is
+        // a plain int16), so this is the closest a black-box harness can get to
+        // "the clamp held": every rendered sample stayed finite and inside a
+        // sane amplitude envelope instead of the file's step overflowing to
+        // +-inf/NaN and poisoning the whole buffer.
+        float maxAbs = 0.0f;
+        bool allFinite = true;
+        for (float v : out) { allFinite = allFinite && std::isfinite (v); maxAbs = std::max (maxAbs, std::fabs (v)); }
+        CHECK (allFinite);
+        CHECK (maxAbs < 2.0f);
+
+        // Direct unit test of the OTHER half of F1: SoundFontBank::load's own
+        // clamp on transpose/keytrack/tuneCents, using generator values that
+        // are themselves out of the SF2 spec's legal range (still representable
+        // as a single int16 generator amount, so TSF happily stores them).
+        std::vector<Sample> csamp = { { "CSample", sine (2000, 41.0), 100, 1900, 44100, 60 } };
+        std::vector<ZoneDesc> czones = {
+            { keyRangeOp (0, 127), genOp (GEN_SAMPLEMODES, 1),
+              genOp (GEN_COARSETUNE, 32000), genOp (GEN_SCALETUNING, 32000), genOp (GEN_FINETUNE, 32000),
+              genOp (GEN_SAMPLEID, 0) },   // SAMPLEID last -- see comment above
+        };
+        std::vector<uint8_t> cfile = buildSf2 (csamp, czones);
+        std::string cerr; auto cbank = SoundFontBank::load (cfile.data(), cfile.size(), cerr);
+        CHECK (cbank != nullptr);
+        if (cbank != nullptr)
+        {
+            const Zone* cz = cbank->zoneForKey (0, 60);
+            CHECK (cz != nullptr);
+            if (cz != nullptr)
+            {
+                CHECK (cz->transpose <= 120 && cz->transpose >= -120);
+                CHECK (cz->keytrack <= 1200 && cz->keytrack >= 0);
+                CHECK (cz->tuneCents <= 12000.0 && cz->tuneCents >= -12000.0);
+            }
+
+            ScoutEngine e2;
+            e2.prepare (44100.0);
+            e2.setBank (cbank.release());
+            e2.setPreset (0);
+            e2.noteOn (60, 127);
+            auto out2 = render (e2, 2048);
+            bool finite2 = true; for (float v : out2) finite2 = finite2 && std::isfinite (v);
+            CHECK (finite2);
+            CHECK (e2.activeVoiceCount() <= ScoutEngine::kMaxVoices);
+        }
+    }
+
+    SECTION ("seqlock");
+    {
+        std::string es; auto bankS = SoundFontBank::load (file.data(), file.size(), es);
+        ScoutEngine e;
+        e.prepare (44100.0);
+        e.setBank (bankS.release());
+        e.setPreset (0);
+        e.noteOn (60, 100);
+        e.noteOn (72, 90);                    // second note-on before any process() call
+        auto ln = e.lastNote();
+        CHECK ((ln.sequence % 2u) == 0u);     // never caught mid-write (an odd sequence)
+        CHECK (ln.note == 72 && ln.velocity == 90 && ln.zoneIndex == 1);   // reflects the LAST note-on
+        // repeated reads settle on the same consistent snapshot
+        for (int k = 0; k < 20; ++k)
+        {
+            auto ln2 = e.lastNote();
+            CHECK (ln2.sequence == ln.sequence && ln2.note == 72 && ln2.velocity == 90 && ln2.zoneIndex == 1);
+        }
+        // a third note-on bumps the sequence again (by 2: odd-then-even) and
+        // publishes a new, fully consistent tuple
+        e.noteOn (60, 50);
+        auto ln3 = e.lastNote();
+        CHECK (ln3.sequence == ln.sequence + 2);
+        CHECK (ln3.note == 60 && ln3.velocity == 50 && ln3.zoneIndex == 0);
+    }
+
+    SECTION ("sample-id");
+    {
+        // Two real samples; a zone whose SAMPLEID names sample 1 but whose
+        // startAddrsOffset generator makes the ABSOLUTE offset land inside
+        // sample 0's [start,end) span. The old offset-based join
+        // (shdrForRegion) would misidentify this as sample 0; F6 makes the
+        // join trust tsf_region::sample_id (set from the SAMPLEID generator
+        // itself) whenever it's valid, so the name follows sample_id, not
+        // the offset.
+        std::vector<Sample> ssamp = {
+            { "SampA", sine (300, 60.0), 0, 0, 44100, 60 },   // pool [0, 300)
+            { "SampB", sine (300, 45.0), 0, 0, 44100, 60 },   // pool [346, 646) (300 + 46 guard)
+        };
+        std::vector<ZoneDesc> szones = {
+            // offset lands inside its OWN sample (unambiguous either way).
+            // SAMPLEID last -- see the "SAMPLEID must come LAST" note above.
+            { keyRangeOp (0, 63), genOp (GEN_SAMPLEMODES, 0), genOp (GEN_STARTADDRSOFFSET, 200), genOp (GEN_SAMPLEID, 0) },
+            // SAMPLEID names sample 1 (SampB, starts at 346); offset -246 makes
+            // the absolute offset 346-246=100 -- inside SampA's [0,300) span
+            { keyRangeOp (64, 127), genOp (GEN_SAMPLEMODES, 0), genOp (GEN_STARTADDRSOFFSET, -246), genOp (GEN_SAMPLEID, 1) },
+        };
+        std::vector<uint8_t> sfile = buildSf2 (ssamp, szones);
+        std::string serr; auto sbank = SoundFontBank::load (sfile.data(), sfile.size(), serr);
+        CHECK (sbank != nullptr);
+        if (sbank != nullptr)
+        {
+            const Zone* zx = sbank->zoneForKey (0, 30);
+            const Zone* zy = sbank->zoneForKey (0, 100);
+            CHECK (zx != nullptr && zy != nullptr);
+            if (zx != nullptr)
+            {
+                CHECK (zx->sampleName == "SampA" && zx->sampleIndex == 0);
+                CHECK (zx->playStart == zx->sampleStart + 200);
+            }
+            if (zy != nullptr)
+            {
+                // the key assertion: name/index follow sample_id (SampB), NOT
+                // the misleading offset (which points into SampA's range)
+                CHECK (zy->sampleName == "SampB");
+                CHECK (zy->sampleIndex == 1);
+            }
+        }
+    }
+
+    SECTION ("stereo-pair");
+    {
+        // Two linked halves (sampleType 4 = left, 2 = right) both covering key
+        // 96, pan left at its generator default (0) -- F11 says an untouched
+        // stereo half hard-pans by sampleType instead of sitting centred.
+        // Distinct, DC-free sine periods per side make channel bleed audible
+        // to estimatePeriod(): if F11 were absent (or wrong), each channel
+        // would be a mix of BOTH periods and the zero-crossing spacing would
+        // not cleanly track either one.
+        // root = 96 = played note, so pitch is native (1:1) and the periods
+        // below survive into the render untouched.
+        std::vector<Sample> psamp = {
+            { "SampL", sine (4000, 70.0),  0, 0, 44100, 96, 4 /*left*/,  1 },
+            { "SampR", sine (4000, 110.0), 0, 0, 44100, 96, 2 /*right*/, 0 },
+        };
+        std::vector<ZoneDesc> pzones = {
+            { keyRangeOp (96, 96), genOp (GEN_SAMPLEMODES, 0), genOp (GEN_SAMPLEID, 0) },
+            { keyRangeOp (96, 96), genOp (GEN_SAMPLEMODES, 0), genOp (GEN_SAMPLEID, 1) },
+        };
+        std::vector<uint8_t> pfile = buildSf2 (psamp, pzones);
+        std::string perr; auto pbank = SoundFontBank::load (pfile.data(), pfile.size(), perr);
+        CHECK (pbank != nullptr);
+        if (pbank != nullptr)
+        {
+            const Zone* pz[8];
+            CHECK (pbank->findZones (0, 96, 127, pz, 8) == 2);   // a stereo pair gives 2 zones
+
+            ScoutEngine e;
+            e.prepare (44100.0);
+            e.setBank (pbank.release());
+            e.setPreset (0);
+            e.noteOn (96, 127);
+            std::vector<float> outL ((size_t) 3000, 0.0f), outR ((size_t) 3000, 0.0f);
+            for (int i = 0; i < 3000; i += 64)
+            {
+                const int m = std::min (64, 3000 - i);
+                e.process (outL.data() + i, outR.data() + i, m, 1.0f);
+            }
+            CHECK (std::fabs (estimatePeriod (outL, 500, 3000) - 70.0) < 0.5);
+            CHECK (std::fabs (estimatePeriod (outR, 500, 3000) - 110.0) < 0.5);
+            float peakL = 0.0f, peakR = 0.0f;
+            for (size_t i = 500; i < 3000; ++i) { peakL = std::max (peakL, std::fabs (outL[i])); peakR = std::max (peakR, std::fabs (outR[i])); }
+            CHECK (peakL > 0.3f && peakL < 0.6f);
+            CHECK (peakR > 0.3f && peakR < 0.6f);
+        }
+    }
+
+    SECTION ("pool-bound");
+    {
+        // shdr.end lies far past the real smpl chunk. TSF clamps every
+        // region's `end` to the true float pool size at load time
+        // (tsf_load_presets' fontSampleCount), never to the header's claim;
+        // F7 makes SoundFontBank::sampleCount() equal to THAT clamp, and
+        // clamps every Zone position to it too, instead of trusting shdr.end.
+        std::vector<Sample> lsamp = { { "LiarSamp", ramp (200), 0, 0, 44100, 60 } };
+        lsamp[0].endOverride = 5000;   // claims 5000 samples; only 200 real + 46 guard exist
+        std::vector<ZoneDesc> lzones = { { keyRangeOp (0, 127), genOp (GEN_SAMPLEMODES, 0), genOp (GEN_SAMPLEID, 0) } };
+        std::vector<uint8_t> lfile = buildSf2 (lsamp, lzones);
+        std::string lerr; auto lbank = SoundFontBank::load (lfile.data(), lfile.size(), lerr);
+        CHECK (lbank != nullptr);
+        if (lbank != nullptr)
+        {
+            // exactly the real pool (200 pcm + 46 guard), never the 5000 lie
+            CHECK (lbank->sampleCount() == 246);
+            const Zone* lz = lbank->zoneForKey (0, 60);
+            CHECK (lz != nullptr);
+            if (lz != nullptr)
+            {
+                CHECK (lz->playEnd <= lbank->sampleCount());
+                CHECK (lz->sampleEnd <= lbank->sampleCount());
+            }
+
+            ScoutEngine e;
+            e.prepare (44100.0);
+            e.setBank (lbank.release());
+            e.setPreset (0);
+            e.noteOn (60, 127);
+            auto out = render (e, 4000);   // far more than the real (clamped) sample length
+            CHECK (e.activeVoiceCount() == 0);   // one-shot zone reached its clamped end and freed -- no crash, no runaway
+            float head = 0.0f; for (size_t i = 0; i < 50; ++i) head = std::max (head, std::fabs (out[i]));
+            CHECK (head > 0.0f);
+        }
+    }
+
+    std::printf ("%d checks, %d failures\n", g_checks, g_failed);
     if (g_failed == 0) std::printf ("ALL CHECKS PASSED\n");
     return g_failed == 0 ? 0 : 1;
 }

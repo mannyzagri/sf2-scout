@@ -58,6 +58,9 @@ private:
     ui::FlatButton nextButton_ { juce::String::fromUTF8 ("\xE2\x80\xBA"), ui::col::inset, ui::col::text, ui::col::hoverBtn, 3.0f, ui::mono (11.0f, true), true };
     juce::ListBox presetList_;
     ui::InfoReadout readout_;
+    // F3: row text copied out of the bank in rebuildForBank() (message thread) so
+    // paintListBoxItem never dereferences proc_.bank().
+    juce::StringArray presetRowIds_, presetRowNames_;
 
     // zone band
     ui::ZoneMapStrip zoneStrip_;

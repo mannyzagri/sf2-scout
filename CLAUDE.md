@@ -64,7 +64,7 @@ Days-scale project; resist scope growth.
 | GUI type | **fixed** — one 920-px-wide plain-JUCE face, not resizable. | handoff README "No responsive behaviour needed — fixed-size plugin window" |
 | GUI technology | **plain JUCE Components — NOT the house WebView pattern.** Recorded deviation D-1. | docs/DSP.md "Tech approach": *"No editor framework beyond stock JUCE components … WebView GUI NOT required"*; handoff README "About the Design Files" says the same |
 | JUCE acquisition | FetchContent pinned to 8.0.4, satisfied offline by `-DFETCHCONTENT_SOURCE_DIR_JUCE=C:/rhino/deps/JUCE` (rhino pattern). | no network dependency at configure |
-| SF2 parsing | **TinySoundFont v0.9** (MIT), vendored verbatim at `third_party/tsf/tsf.h` + `LICENSE`. Used for parsing only; playback is our own (spec "Tech approach"). | docs/DSP.md |
+| SF2 parsing | **TinySoundFont v0.9** (MIT), vendored at `third_party/tsf/tsf.h` + `LICENSE` with a 3-line marked patch (D-6). Used for parsing only; playback is our own (spec "Tech approach"). | docs/DSP.md |
 | Roles used | vm-claude (everything in the repo), gui-claude (the face — handoff v1 received 2026-08-29), windows-claude (Cubase 15 ear test on the host). mac-claude not used yet. | `comms/AGENTS.md` |
 | Repo | `mannyzagri/sf2-scout` — exists, private assumed (created empty by the operator before kickoff). | `git ls-remote` empty/exit 0 on 2026-08-30 |
 
@@ -138,7 +138,7 @@ Deploy targets: `validator.json` `deploy.targets`. Compiles go through
 |---|---|---|---|
 | 0 | Scaffold, SSOT draft, naming, harness, first build | harness ALL CHECKS PASSED; VST3 + Standalone build; pushed | **2026-08-30** — see STATE |
 | 1 | Load + preset list + AS-AUTHORED playback | acceptance 1 (three SF2s load, list, play) — operator ear | code complete, unaudited |
-| 2 | Own read-pointer path: two modes, release fade, 32-voice pool | acceptance 2, 3, 5 — harness `[authored]` `[looponly]` `[pitch]` `[release]` + operator ear | harness green, unaudited |
+| 2 | Own read-pointer path: two modes, release fade, 32-voice pool | acceptance 2, 3, 5 — harness `[authored]` `[looponly]` `[pitch]` `[release]` + operator ear | harness green (112 checks incl. hostile-pitch/seqlock/sample-id/stereo-pair/pool-bound), unaudited |
 | 3 | Info readout + zone piano strip | acceptance 4 — chromatic scale across a zone boundary flips the readout at the boundary key | code complete, unaudited |
 | 4 | Drag-drop, polish, pluginval 5, Cubase 15 | acceptance 6, 7 | pluginval 5 PASS 2026-08-30 |
 
@@ -157,3 +157,4 @@ synth bank — docs/DSP.md acceptance 1); they live on the share, never in git.
 | D-3 | Window height is the SUM of the handoff's stated row heights (48 + 310 + 120 + 44 = 522 px) rather than the ~700 px of the Claude Design preview frame. | The README says "scale down proportionally if a smaller default window is required, do not shrink the strip below 48 px or numerals below 16 px" — both kept at full size; 700 was the preview canvas, not a row sum. | 2026-08-30 |
 | D-4 | Linear pan (centre = unity) for stereo halves, sqrt velocity curve, no SF2 attenuation generator. | Spec: velocity → level only; samples auditioned raw. | 2026-08-30 |
 | D-5 | Loop seam: linear interpolation with the second tap wrapped into the loop; no crossfade. | Spec: crossfade only if raw looping clicks audibly — decide after the operator's ear pass. | 2026-08-30 |
+| D-6 | `third_party/tsf/tsf.h` is NOT byte-verbatim upstream: 3 lines marked `/* SF2SCOUT PATCH */` add `tsf_region::sample_id` (the `sampleID` generator index). | TSF discards the hydra after load and joining region→sample by offset misattributes zones that use `startAddrsOffset` (architect finding 6). Re-apply when bumping TSF; harness `[sample-id]` pins it. | 2026-08-30 |

@@ -16,7 +16,8 @@ namespace ParamId
 }
 
 class ScoutProcessor : public juce::AudioProcessor,
-                       private juce::Timer
+                       private juce::Timer,
+                       private juce::AsyncUpdater
 {
 public:
     ScoutProcessor();
@@ -67,13 +68,15 @@ public:
     const ScoutEngine& engine() const { return engine_; }
 
     // bumps every time a new bank lands, so the editor can rebuild its lists
-    int bankGeneration() const { return bankGeneration_; }
+    int bankGeneration() const { return bankGeneration_.load (std::memory_order_acquire); }
 
     static constexpr const char* kBuildStamp = SF2SCOUT_VERSION_STRING " " __DATE__ " " __TIME__;
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     void timerCallback() override;
+    void handleAsyncUpdate() override;      // F2: runs the restore-triggered load on the message thread
+    void performPendingRestore();           // JUCE_ASSERT_MESSAGE_THREAD inside
 
     juce::AudioProcessorValueTreeState apvts_;
     ScoutEngine engine_;
@@ -82,16 +85,24 @@ private:
     std::atomic<float>* modeParam_    = nullptr;
     std::atomic<float>* channelParam_ = nullptr;
     juce::SmoothedValue<float> gainSmoother_;
+    int lastChannelFilter_ = -1;    // audio thread only (F9): detects midiChannel changes block-to-block
 
     std::atomic<int> presetIndex_ { 0 };
     const SoundFontBank* uiBank_ = nullptr;      // message-thread alias of the requested bank
-    juce::String loadedFileName_, loadedFilePath_;
-    int bankGeneration_ = 0;
+    juce::String loadedFileName_, loadedFilePath_;   // message-thread only, writes assert JUCE_ASSERT_MESSAGE_THREAD
+    std::atomic<int> bankGeneration_ { 0 };
+
+    // F2: setStateInformation may run on any host thread; the actual load is
+    // deferred to the message thread (AsyncUpdater cancels any pending update
+    // in its destructor, so a destroyed processor is never touched).
+    juce::String pendingRestorePath_;
+    int pendingRestorePreset_ = 0;
 
     // UI -> audio thread note queue (lock-free, single producer / single consumer)
     struct UiNote { int note; int velocity; bool on; };
     juce::AbstractFifo uiNoteFifo_ { 64 };
     std::array<UiNote, 64> uiNotes_ {};
+    std::atomic<bool> uiPanic_ { false };   // F10: set when auditionRelease can't queue a note-off
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ScoutProcessor)
 };

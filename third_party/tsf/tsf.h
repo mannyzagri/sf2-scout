@@ -426,6 +426,7 @@ struct tsf_voice_lfo { int samplesUntil; float level, delta; };
 struct tsf_region
 {
 	int loop_mode;
+	int sample_id; /* SF2SCOUT PATCH: shdr index this region's SAMPLEID generator named, -1 if none/unknown */
 	unsigned int sample_rate;
 	unsigned char lokey, hikey, lovel, hivel;
 	unsigned int group, offset, end, loop_start, loop_end;
@@ -499,6 +500,7 @@ static TSF_BOOL tsf_riffchunk_read(struct tsf_riffchunk* parent, struct tsf_riff
 static void tsf_region_clear(struct tsf_region* i, TSF_BOOL for_relative)
 {
 	TSF_MEMSET(i, 0, sizeof(struct tsf_region));
+	i->sample_id = -1; /* SF2SCOUT PATCH: no SAMPLEID seen yet */
 	i->hikey = i->hivel = 127;
 	i->pitch_keycenter = 60; // C4
 	if (for_relative) return;
@@ -822,6 +824,7 @@ static int tsf_load_presets(tsf* res, struct tsf_hydra *hydra, unsigned int font
 
 								// Fixup sample positions
 								pshdr = &hydra->shdrs[pigen->genAmount.wordAmount];
+								zoneRegion.sample_id = (int)pigen->genAmount.wordAmount; /* SF2SCOUT PATCH: remember which shdr SAMPLEID actually named */
 								zoneRegion.offset += pshdr->start;
 								zoneRegion.end += pshdr->end;
 								zoneRegion.loop_start += pshdr->startLoop;

@@ -72,6 +72,15 @@ namespace
         return false;
     }
 
+    // F1: SF2 generator values are attacker-controlled (a hostile/fuzzed file);
+    // TSF does not clamp CoarseTune/ScaleTuning/FineTune (see genMetas rows 51,
+    // 52, 56 in tsf.h -- no _GEN_LIMIT_MASK bits), so an unbounded value here can
+    // reach startVoice's pitch formula and blow up to a subnormal/absurd step.
+    // Clamp at the source, before it ever reaches a Zone the audio thread reads.
+    inline int    clampTranspose (int v)    { return std::max (-120, std::min (120, v)); }
+    inline int    clampKeytrack  (int v)    { return std::max (0, std::min (1200, v)); }
+    inline double clampTuneCents (double v) { return std::max (-12000.0, std::min (12000.0, v)); }
+
     // Join a region back to its sample header: the shdr whose [start,end]
     // contains the region's play offset (TSF adds shdr.start to it).
     int shdrForRegion (const std::vector<ShdrRec>& shdrs, const tsf_region& r)
@@ -130,14 +139,21 @@ std::unique_ptr<SoundFontBank> SoundFontBank::load (const void* data, size_t siz
     bank->font_ = f;
     bank->samples_ = f->fontSamples;
 
-    // TSF does not keep the sample count; recover it from the headers
-    // (every region end has already been clamped to it by TSF).
+    // F7: sampleCount_ must be a real pool bound. shdr.end is file-supplied and
+    // can lie (point past the actual smpl chunk); TSF's region.end cannot -- it
+    // clamps every region to the true float pool size (fontSampleCount in
+    // tsf_load_presets). So the bound comes ONLY from TSF region ends, never
+    // from the raw headers.
     uint32_t maxEnd = 0;
-    for (const auto& h : shdrs) if (! (h.sampleType & 0x8000)) maxEnd = std::max (maxEnd, h.end);
     for (int p = 0; p < f->presetNum; ++p)
         for (int r = 0; r < f->presets[p].regionNum; ++r)
             maxEnd = std::max (maxEnd, f->presets[p].regions[r].end);
     bank->sampleCount_ = maxEnd;
+    if (maxEnd == 0)
+    {
+        error = "no playable sample data";
+        return nullptr;
+    }
 
     bank->presets_.reserve ((size_t) f->presetNum);
     for (int p = 0; p < f->presetNum; ++p)
@@ -155,9 +171,9 @@ std::unique_ptr<SoundFontBank> SoundFontBank::load (const void* data, size_t siz
             Zone z;
             z.lokey = tr.lokey; z.hikey = tr.hikey; z.lovel = tr.lovel; z.hivel = tr.hivel;
             z.rootKey   = tr.pitch_keycenter;
-            z.transpose = tr.transpose;
-            z.tuneCents = tr.tune;                     // already includes shdr.pitchCorrection
-            z.keytrack  = tr.pitch_keytrack;
+            z.transpose = clampTranspose (tr.transpose);
+            z.tuneCents = clampTuneCents ((double) tr.tune);   // already includes shdr.pitchCorrection
+            z.keytrack  = clampKeytrack (tr.pitch_keytrack);
             z.sampleRate = tr.sample_rate;
             z.playStart = tr.offset;
             z.playEnd   = tr.end;
@@ -166,7 +182,18 @@ std::unique_ptr<SoundFontBank> SoundFontBank::load (const void* data, size_t siz
             z.loopMode  = (LoopMode) tr.loop_mode;
             z.pan       = tr.pan;
 
-            const int si = shdrForRegion (shdrs, tr);
+            // F6: prefer the SAMPLEID generator TSF recorded on the region (a
+            // real shdr index -- unambiguous) over the offset search, which
+            // misidentifies the sample whenever startAddrsOffset pushes the
+            // absolute offset into a DIFFERENT sample's [start,end) span.
+            // Fall back to the offset search only when TSF didn't see a
+            // SAMPLEID (sample_id == -1) or it's out of range.
+            int si = -1;
+            if (tr.sample_id >= 0 && (size_t) tr.sample_id < shdrs.size()
+                && ! (shdrs[(size_t) tr.sample_id].sampleType & 0x8000))
+                si = tr.sample_id;
+            else
+                si = shdrForRegion (shdrs, tr);
             z.sampleIndex = si;
             if (si >= 0)
             {
@@ -183,9 +210,15 @@ std::unique_ptr<SoundFontBank> SoundFontBank::load (const void* data, size_t siz
                 z.sampleStart = tr.offset;
                 z.sampleEnd   = tr.end;
             }
-            // sanitise geometry so the player can trust it blindly
+            // F7: sanitise geometry so the player can trust it blindly -- every
+            // position is clamped to the real pool bound, never to a possibly
+            // lying shdr.end.
+            z.sampleStart = std::min (z.sampleStart, maxEnd);
+            z.sampleEnd   = std::min (z.sampleEnd, maxEnd);
+            if (z.sampleStart > z.sampleEnd) z.sampleStart = z.sampleEnd;
             z.playEnd   = std::min (z.playEnd, maxEnd);
             z.playStart = std::min (z.playStart, z.playEnd);
+            z.loopStart = std::min (z.loopStart, maxEnd);
             z.loopEnd   = std::min (z.loopEnd, z.playEnd);
             if (z.loopStart >= z.loopEnd) z.loopMode = LoopMode::None;
             if (z.sampleRate == 0) z.sampleRate = 44100;

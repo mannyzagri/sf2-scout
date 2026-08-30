@@ -170,26 +170,24 @@ void ScoutEditor::paint (juce::Graphics& g)
 // ------------------------------------------------------------------ list
 int ScoutEditor::getNumRows()
 {
-    const auto* b = proc_.bank();
-    return b != nullptr ? b->presetCount() : 0;
+    return presetRowIds_.size();
 }
 
 void ScoutEditor::paintListBoxItem (int row, juce::Graphics& g, int w, int h, bool selected)
 {
-    const auto* b = proc_.bank();
-    if (b == nullptr || row < 0 || row >= b->presetCount()) return;
-    const Preset& p = b->presets()[(size_t) row];
+    // F3: reads the row text copied out by rebuildForBank(), never the bank itself.
+    if (row < 0 || row >= presetRowIds_.size()) return;
     if (selected) { g.setColour (col::selRow); g.fillRect (0, 0, w, h); }
     g.setColour (col::hairlineRow); g.fillRect (0, h - 1, w, 1);
     auto r = juce::Rectangle<int> (12, 0, w - 24, h - 1);
-    const juce::String id = InfoReadout::presetId (p);
+    const juce::String& id = presetRowIds_[row];
     g.setFont (mono (11.0f));
     g.setColour (selected ? col::accent : col::text3);
     const int idW = (int) std::ceil (juce::GlyphArrangement::getStringWidth (mono (11.0f), id));
     g.drawText (id, r.removeFromLeft (idW), juce::Justification::centredLeft, false);
     r.removeFromLeft (10);
     g.setFont (sans (13.0f)); g.setColour (col::text);
-    g.drawText (S (p.name), r, juce::Justification::centredLeft, true);
+    g.drawText (presetRowNames_[row], r, juce::Justification::centredLeft, true);
 }
 
 void ScoutEditor::listBoxItemClicked (int row, const juce::MouseEvent&) { selectedRowsChanged (row); }
@@ -252,7 +250,18 @@ void ScoutEditor::showError (const juce::String& msg)
 void ScoutEditor::rebuildForBank()
 {
     seenBankGeneration_ = proc_.bankGeneration();
-    fileLabel_ = proc_.bank() != nullptr ? proc_.loadedFileName() : juce::String::fromUTF8 ("\xE2\x80\x94 no file loaded \xE2\x80\x94");
+    const auto* b = proc_.bank();
+    fileLabel_ = b != nullptr ? proc_.loadedFileName() : juce::String::fromUTF8 ("\xE2\x80\x94 no file loaded \xE2\x80\x94");
+    // F3: copy the row text now, on the message thread, while the bank is live --
+    // paintListBoxItem must never dereference proc_.bank() itself.
+    presetRowIds_.clear();
+    presetRowNames_.clear();
+    if (b != nullptr)
+        for (const auto& p : b->presets())
+        {
+            presetRowIds_.add (InfoReadout::presetId (p));
+            presetRowNames_.add (S (p.name));
+        }
     presetList_.updateContent();
     if (getNumRows() > 0) presetList_.selectRow (proc_.presetIndex(), true, true);
     shownNote_ = -1;
@@ -272,30 +281,36 @@ void ScoutEditor::refreshReadout (bool force)
     if (! force && ! newNote && shownPlayhead_ == playhead && shownMode_ == mode) return;
 
     ReadoutState s;
-    s.bank = bank;
     s.presetIndex = proc_.presetIndex();
     s.mode = (PlayMode) mode;
     s.playhead = playhead;
     if (newNote) { shownNote_ = info.note; shownPreset_ = info.presetIndex; seenNoteSeq_ = info.sequence; }
     s.note = shownNote_;
+    // F3: everything below reads `bank` synchronously right here (message thread,
+    // loads also happen on the message thread post-F2) and copies by value --
+    // nothing keeps a pointer into the bank past this function.
+    s.presetLabel = dash();
+    if (bank != nullptr && s.presetIndex >= 0 && s.presetIndex < bank->presetCount())
+    {
+        const Preset& p = bank->presets()[(size_t) s.presetIndex];
+        s.presetLabel = InfoReadout::presetId (p) + "  " + S (p.name);
+    }
     // The zone described is resolved on the message thread from the bank the UI holds.
     // A note played on a previous preset keeps describing that preset's zone until the next note.
     if (bank != nullptr && shownNote_ >= 0)
     {
         const int pi = (shownPreset_ >= 0 && shownPreset_ < bank->presetCount()) ? shownPreset_ : s.presetIndex;
         if (newNote && info.zoneIndex >= 0 && pi < bank->presetCount() && info.zoneIndex < (int) bank->presets()[(size_t) pi].zones.size())
-            s.zone = &bank->presets()[(size_t) pi].zones[(size_t) info.zoneIndex];
-        else
-            s.zone = bank->zoneForKey (pi, shownNote_);
+            s.zone = bank->presets()[(size_t) pi].zones[(size_t) info.zoneIndex];
+        else if (const Zone* zp = bank->zoneForKey (pi, shownNote_))
+            s.zone = *zp;
         if (newNote) shownPreset_ = pi;
     }
     shownPlayhead_ = playhead;
     shownMode_ = mode;
     readout_.update (s);
     // the strip follows the active (selected) preset, the readout the last note
-    ReadoutState stripState = s;
-    stripState.presetIndex = proc_.presetIndex();
-    zoneStrip_.update (stripState);
+    zoneStrip_.update (bank, proc_.presetIndex(), shownNote_);
     zoneLabels_.update (zoneStrip_);
     if (force || newNote) repaint (getLocalBounds().removeFromTop (kHeaderH + kBodyH + kZoneBandH).removeFromBottom (kZoneBandH).removeFromTop (30));
 }

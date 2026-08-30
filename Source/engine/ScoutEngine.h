@@ -33,7 +33,7 @@ struct LastNoteInfo
     int note        = -1;
     int velocity    = 0;
     int zoneIndex   = -1;        // index into Preset::zones of the zone described
-    uint32_t sequence = 0;       // bumps on every note-on
+    uint32_t sequence = 0;       // see lastNote() -- advances by 2 per note-on, never odd here
 };
 
 class ScoutEngine
@@ -69,6 +69,15 @@ public:
     void process (float* left, float* right, int numSamples, float gain);
 
     // polled by the UI
+    // F5: lastSeq_ is a classic seqlock, not a plain counter. The writer
+    // (noteOn, audio thread) bumps it to an ODD value before touching the
+    // fields, writes preset/note/velocity/zone, then bumps it again to the
+    // next EVEN value once all four are published. A reader who observes an
+    // odd sequence, or a sequence that changed between its first and last
+    // load, saw a torn write and must retry -- this is what makes a 4-field
+    // read atomic without ever taking a lock on the audio thread. Retries are
+    // bounded (kSeqlockRetries) so a UI thread can never spin on this.
+    static constexpr int kSeqlockRetries = 8;
     LastNoteInfo lastNote() const;
     int    activeVoiceCount() const { return activeVoices_.load (std::memory_order_relaxed); }
     // playhead of the most recent voice, sample-relative (0..sampleLength), or -1 if it stopped

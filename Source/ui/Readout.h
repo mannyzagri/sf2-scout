@@ -6,19 +6,22 @@
 #include "../engine/ScoutEngine.h"
 #include "../engine/NoteNames.h"
 #include <functional>
+#include <optional>
 
 namespace sf2scout::ui
 {
 
 // What every display is fed: the last note + the zone it landed on.
+// F3: no raw pointers into a bank the processor's 10 Hz collector can delete --
+// everything here is a value copied on the message thread at update() time.
 struct ReadoutState
 {
-    const SoundFontBank* bank = nullptr;
     int presetIndex = -1;
-    int note = -1;                 // -1 = nothing played yet
-    const Zone* zone = nullptr;    // zone described (nullptr = none)
+    int note = -1;                        // -1 = nothing played yet
+    std::optional<Zone> zone;             // copy of the zone described (nullopt = none)
     PlayMode mode = PlayMode::AsAuthored;
-    double playhead = -1.0;        // sample-relative, -1 = stopped
+    double playhead = -1.0;               // sample-relative, -1 = stopped
+    juce::String presetLabel;             // precomputed "bank:program  Name" (or a dash), for the row header
 };
 
 inline juce::String S (const std::string& s) { return juce::String::fromUTF8 (s.c_str()); }
@@ -38,21 +41,15 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto area = getLocalBounds().reduced (kPadX, 0).withTrimmedTop (kPadTop).withTrimmedBottom (kPadBottom);
-        const Zone* z = st_.zone;
+        const Zone* z = st_.zone ? &(*st_.zone) : nullptr;
         const bool have = st_.note >= 0 && z != nullptr;
 
         // row 1: LAST NOTE PLAYED ...... bank:program  Name
         auto row = area.removeFromTop (kLabelRow);
         g.setFont (smallLabel()); g.setColour (col::label);
         g.drawText ("LAST NOTE PLAYED", row, juce::Justification::centredLeft, false);
-        juce::String presetLabel = dash();
-        if (st_.bank != nullptr && st_.presetIndex >= 0 && st_.presetIndex < st_.bank->presetCount())
-        {
-            const Preset& p = st_.bank->presets()[(size_t) st_.presetIndex];
-            presetLabel = presetId (p) + "  " + S (p.name);
-        }
         g.setFont (mono (11.0f));
-        g.drawText (presetLabel, row, juce::Justification::centredRight, false);
+        g.drawText (st_.presetLabel, row, juce::Justification::centredRight, false);
         area.removeFromTop (kGap);
 
         // row 2: four big fields
@@ -178,16 +175,21 @@ public:
     std::function<void (int)> onKeyDown;    // audition
     std::function<void (int)> onKeyUp;
 
-    void update (const ReadoutState& s)
+    // F3: copies the preset's zones by value at update time (message thread,
+    // bank guaranteed live) instead of keeping a pointer into the bank.
+    void update (const SoundFontBank* bank, int presetIndex, int selectedNote)
     {
-        preset_ = (s.bank != nullptr && s.presetIndex >= 0 && s.presetIndex < s.bank->presetCount())
-                    ? &s.bank->presets()[(size_t) s.presetIndex] : nullptr;
-        selected_ = s.note;
+        zones_.clear();
+        if (bank != nullptr && presetIndex >= 0 && presetIndex < bank->presetCount())
+            zones_ = bank->presets()[(size_t) presetIndex].zones;
+        selected_ = selectedNote;
         buildCoverage();
         repaint();
     }
-    int zoneCount() const { return preset_ != nullptr ? (int) preset_->zones.size() : 0; }
-    const Preset* preset() const { return preset_; }
+    int zoneCount() const { return (int) zones_.size(); }
+    // Non-owning view into this strip's own copy -- valid as long as the strip is
+    // (used by ZoneLabelsRow, which is a sibling with the same editor lifetime).
+    const Zone* zoneAt (int i) const { return (i >= 0 && i < (int) zones_.size()) ? &zones_[(size_t) i] : nullptr; }
 
     void paint (juce::Graphics& g) override
     {
@@ -199,7 +201,7 @@ public:
             juce::Rectangle<float> cell ((float) r.getX() + n * cw, (float) r.getY(), cw, (float) r.getHeight());
             const int zi = zoneOfKey_[n];
             const bool sel = n == selected_;
-            juce::Colour bg = sel ? col::accent : (preset_ == nullptr ? col::zoneB : (zi < 0 ? col::inset : ((zi % 2) == 0 ? col::zoneA : col::zoneB)));
+            juce::Colour bg = sel ? col::accent : (zones_.empty() ? col::zoneB : (zi < 0 ? col::inset : ((zi % 2) == 0 ? col::zoneA : col::zoneB)));
             g.setColour (bg); g.fillRect (cell);
             if (isBlackKey (n))
             {
@@ -211,7 +213,7 @@ public:
                 g.setColour (juce::Colour (0x591c1c1a));
                 g.fillRect (cell.withTop (cell.getBottom() - 4.0f));
             }
-            if (zi >= 0 && preset_ != nullptr && preset_->zones[(size_t) zi].hikey == n)
+            if (zi >= 0 && zones_[(size_t) zi].hikey == n)
             {
                 g.setColour (col::zoneEdge);
                 g.fillRect (juce::Rectangle<float> (cell.getRight() - 1.0f, cell.getY(), 1.0f, cell.getHeight()));
@@ -225,7 +227,7 @@ public:
         const int n = keyAt (e.x);
         juce::String tip = S (noteName (n)) + "  " + dash() + "  ";
         const int zi = zoneOfKey_[n];
-        tip += (zi >= 0 && preset_ != nullptr) ? S (preset_->zones[(size_t) zi].sampleName) : juce::String ("(no zone)");
+        tip += (zi >= 0) ? S (zones_[(size_t) zi].sampleName) : juce::String ("(no zone)");
         setTooltip (tip);
     }
     void mouseDown (const juce::MouseEvent& e) override
@@ -247,12 +249,11 @@ private:
         for (int n = 0; n < 128; ++n)
         {
             zoneOfKey_[n] = -1;
-            if (preset_ == nullptr) continue;
-            for (size_t i = 0; i < preset_->zones.size(); ++i)
-                if (preset_->zones[i].coversKey (n)) { zoneOfKey_[n] = (int) i; break; }
+            for (size_t i = 0; i < zones_.size(); ++i)
+                if (zones_[i].coversKey (n)) { zoneOfKey_[n] = (int) i; break; }
         }
     }
-    const Preset* preset_ = nullptr;
+    std::vector<Zone> zones_;      // F3: value copy of the current preset's zones
     int selected_ = -1, held_ = -1;
     int zoneOfKey_[128] {};
 };
@@ -264,7 +265,7 @@ public:
     void update (const ZoneMapStrip& strip) { strip_ = &strip; repaint(); }
     void paint (juce::Graphics& g) override
     {
-        if (strip_ == nullptr || strip_->preset() == nullptr) return;
+        if (strip_ == nullptr || strip_->zoneCount() == 0) return;
         // Blocks follow the FIRST-covering zone per key so they line up with the strip's bands.
         const float cw = (float) getWidth() / 128.0f;
         int n = 0;
@@ -273,9 +274,9 @@ public:
             const int zi = strip_->zoneOfKey (n);
             int end = n;
             while (end + 1 < 128 && strip_->zoneOfKey (end + 1) == zi) ++end;
-            if (zi >= 0)
+            if (const Zone* zp = strip_->zoneAt (zi))
             {
-                const Zone& z = strip_->preset()->zones[(size_t) zi];
+                const Zone& z = *zp;
                 juce::Rectangle<int> block ((int) (n * cw), 0, (int) ((end - n + 1) * cw), getHeight());
                 g.setColour (col::control); g.fillRect (block.getX(), 0, 1, getHeight());
                 auto text = block.withTrimmedLeft (6).withTrimmedRight (6);

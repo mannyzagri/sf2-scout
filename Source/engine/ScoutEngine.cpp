@@ -83,10 +83,24 @@ void ScoutEngine::startVoice (const Zone& z, int note, int velocity)
     v.startOrder = ++orderCounter_;
 
     // Pitch: mirror TSF's calc (transpose + tune, keytrack scaling about root).
+    // F1 (BLOCKER): z.transpose/z.keytrack/z.tuneCents are already clamped at
+    // load time (SoundFontBank::load), but keytrack can still amplify an
+    // in-range note+transpose deviation into an astronomical exponent (e.g.
+    // keytrack=1200% with a +120 semitone transpose at note 127 -> 2^187).
+    // std::pow of that either overflows to +inf or, after further arithmetic,
+    // can go non-finite/non-positive -- either would spin renderVoice's read
+    // pointer forever. Clamp defensively, after the fact, on the computed step
+    // itself: this is the last line of defence, independent of what generator
+    // values produced it.
     const double n = note + z.transpose + z.tuneCents / 100.0;
     const double adjusted = z.rootKey + (n - z.rootKey) * (z.keytrack / 100.0);
-    v.baseStep = std::pow (2.0, (adjusted - z.rootKey) / 12.0) * (double) z.sampleRate / sampleRate_;
-    v.step = v.baseStep * std::pow (2.0, bendSemis_ / 12.0);
+    double baseStep = std::pow (2.0, (adjusted - z.rootKey) / 12.0) * (double) z.sampleRate / sampleRate_;
+    if (! std::isfinite (baseStep) || baseStep <= 0.0) baseStep = 1.0;
+    baseStep = std::max (1.0 / 256.0, std::min (256.0, baseStep));
+    v.baseStep = baseStep;
+    double step = v.baseStep * std::pow (2.0, bendSemis_ / 12.0);
+    if (! std::isfinite (step) || step <= 0.0) step = v.baseStep;
+    v.step = std::max (1.0 / 256.0, std::min (256.0, step));
 
     // Level: sqrt velocity curve, no SF2 attenuation (spec §2).
     v.gain = std::sqrt (std::max (1, std::min (127, velocity)) / 127.0f);
@@ -95,6 +109,15 @@ void ScoutEngine::startVoice (const Zone& z, int note, int velocity)
     const float p = std::max (-1.0f, std::min (1.0f, z.pan));
     v.panL = 1.0f - std::max (0.0f, p);
     v.panR = 1.0f + std::min (0.0f, p);
+    // F11: an untouched (pan==0) stereo half is authored to sit hard left/right,
+    // not centre -- SF2's own linked-sample convention (sampleType 4 = left half,
+    // 2 = right half). Only a region that never set a pan generator gets this;
+    // an explicit pan (z.pan != 0) always wins via the general case above.
+    if (z.pan == 0.0f && z.isStereoHalf())
+    {
+        if (z.sampleType == 4)      { v.panL = 1.0f; v.panR = 0.0f; }   // left half
+        else if (z.sampleType == 2) { v.panL = 0.0f; v.panR = 1.0f; }   // right half
+    }
 
     v.playEnd = (double) z.playEnd;
     const bool hasLoop = z.hasLoop();
@@ -119,7 +142,13 @@ void ScoutEngine::startVoice (const Zone& z, int note, int velocity)
 
 void ScoutEngine::noteOn (int note, int velocity)
 {
-    consumePendingBank();   // audio-thread API; a note may precede the first block
+    // F8 (NIT): kept deliberately. noteOn() is an audio-thread API and the
+    // harness (and a real host feeding MIDI slightly ahead of the first
+    // process() call) can call it before any process() has run, so `active_`
+    // would otherwise still be null. Once process() has run at least once for
+    // this bank, pending_ is already null and this is a single relaxed atomic
+    // load that returns immediately -- a no-op, not a duplicate consume.
+    consumePendingBank();
     if (active_ == nullptr || note < 0 || note > 127 || velocity <= 0) return;
     const Zone* zones[8];
     const int n = active_->findZones (preset_, note, velocity, zones, 8);
@@ -133,11 +162,14 @@ void ScoutEngine::noteOn (int note, int velocity)
         const auto& zs = active_->presets()[(size_t) preset_].zones;
         zoneIndex = (int) (described - zs.data());
     }
+    // F5 seqlock write side: odd while the four fields below are in flight,
+    // even once they're all consistent. See the comment on lastNote()/lastSeq_.
+    lastSeq_.fetch_add (1, std::memory_order_acq_rel);   // -> odd: write in progress
     lastPreset_.store (preset_, std::memory_order_relaxed);
     lastNoteNum_.store (note, std::memory_order_relaxed);
     lastVel_.store (velocity, std::memory_order_relaxed);
     lastZone_.store (zoneIndex, std::memory_order_relaxed);
-    lastSeq_.fetch_add (1, std::memory_order_release);
+    lastSeq_.fetch_add (1, std::memory_order_release);   // -> even: write complete
 
     for (int i = 0; i < n; ++i)
         startVoice (*zones[i], note, velocity);
@@ -179,9 +211,26 @@ void ScoutEngine::renderVoice (Voice& v, float* left, float* right, int numSampl
     {
         if (loop)
         {
-            while (pos >= loopEnd) pos -= (loopEnd - v.loopStart);
+            // F1 (BLOCKER): loop length (loopEnd - v.loopStart) is guaranteed
+            // > 1 here (the `loop` flag above requires it), so this fmod is
+            // always a safe divisor. This replaces an unbounded
+            // `while (pos >= loopEnd) pos -= length`: with a hostile/extreme
+            // pitch (see startVoice), pos can be advanced by hundreds of loop
+            // lengths in a single output sample, and that while loop would
+            // iterate that many times PER SAMPLE -- spinning the audio thread.
+            // fmod wraps it in one step regardless of how far pos overshot.
+            if (pos >= loopEnd)
+                pos = v.loopStart + std::fmod (pos - v.loopStart, loopEnd - v.loopStart);
         }
         else if (pos >= end - 1.0)
+        {
+            v.active = false;
+            break;
+        }
+        // F1: belt-and-suspenders on the read pointer itself -- never let a
+        // pathological pos (any NaN slipped in, or an edge the wrap above
+        // didn't anticipate) turn into an out-of-bounds pool index.
+        if (! (pos >= 0.0) || pos >= poolEnd)
         {
             v.active = false;
             break;
@@ -234,14 +283,25 @@ void ScoutEngine::process (float* left, float* right, int numSamples, float gain
 
 LastNoteInfo ScoutEngine::lastNote() const
 {
+    // F5 seqlock read side: retry while the sequence is odd (writer mid-flight)
+    // or changed between our first and last look (a write happened underneath
+    // us) -- either way the four fields we just read could be torn across two
+    // different note-ons. Bounded retries: never spin on the audio thread's
+    // behalf.
     LastNoteInfo i;
-    // seq is written last by the audio thread (release); read it first (acquire)
-    i.sequence    = lastSeq_.load (std::memory_order_acquire);
-    i.presetIndex = lastPreset_.load (std::memory_order_relaxed);
-    i.note        = lastNoteNum_.load (std::memory_order_relaxed);
-    i.velocity    = lastVel_.load (std::memory_order_relaxed);
-    i.zoneIndex   = lastZone_.load (std::memory_order_relaxed);
-    return i;
+    for (int tries = 0; tries < kSeqlockRetries; ++tries)
+    {
+        const uint32_t s1 = lastSeq_.load (std::memory_order_acquire);
+        if (s1 & 1u) continue;                          // writer in progress
+        i.sequence    = s1;
+        i.presetIndex = lastPreset_.load (std::memory_order_relaxed);
+        i.note        = lastNoteNum_.load (std::memory_order_relaxed);
+        i.velocity    = lastVel_.load (std::memory_order_relaxed);
+        i.zoneIndex   = lastZone_.load (std::memory_order_relaxed);
+        const uint32_t s2 = lastSeq_.load (std::memory_order_acquire);
+        if (s1 == s2) return i;                         // consistent snapshot
+    }
+    return i;   // best effort after kSeqlockRetries: still a real, if stale, snapshot
 }
 
 } // namespace sf2scout

@@ -4,20 +4,20 @@
 
 ## Where things stand
 
-- Phase 0 done: scaffold, SSOT draft (unsigned), naming contract, engine +
-  harness (58/58), plain-JUCE face wired to handoff v1, first Release build.
-- Nothing deployed, nothing heard. pluginval strictness 5: PASS.
-- Kickoff interview batch is in PROJECT-NOTES.md OPEN QUESTIONS — 7 items,
-  answers wanted in one round.
+- Phase 0–4 code complete: scaffold, SSOT SIGNED, architect review applied
+  (3 blockers + 4 should-fix + nits), harness 112/112, plain-JUCE face wired.
+- **v0.1.0 DEPLOYED** to `\VBOXSVRagrant\Builds\SF2 Scout.vst3` (+ `SF2 Scout.exe`)
+  via release.ps1; pluginval 5 PASS. **Nothing heard yet** — ear pass is the gate.
+- OPEN QUESTIONS 5–7 (window height, Plex fonts, keep Standalone) still open.
 
 ## Fresh-session entry ramp
 
 1. `git pull` (mac lane not open; still the rule).
 2. Read CLAUDE.md §0–§2, PROJECT-NOTES STATE, this file, `comms/to-vm.md`.
-3. If the operator answered the batch: fold answers into CLAUDE.md §0 /
-   naming contract, sign SSOT.md, move items to RULED.
-4. Then: `validate.ps1 -Project C:\sf2-scout` → `release.ps1` → deploy →
-   ask for the ear pass.
+3. Fold the ear verdict: a click at the loop seam → D-5 crossfade via
+   /dsp-pass (harness `[authored]` pins the seam); readout wrong at a zone
+   edge → check `[sample-id]` first.
+4. Any change: harness → `release.ps1 -DryRun` → `release.ps1` → `ship.ps1`.
 
 ## Git
 
