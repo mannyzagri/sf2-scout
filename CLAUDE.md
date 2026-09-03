@@ -56,6 +56,18 @@ listening reference for a by-ear recreation workflow on hardware. It is NOT a
 SoundFont synthesizer, NOT a converter, and must never grow export/record/save.
 Days-scale project; resist scope growth.
 
+## Scope layer — 2026-09-03 (user directive): WAV loop editing = Slot W
+
+`docs/SF2SCOUT_WAV_EXTENSION.md` (received verbatim) adds a second source
+slot: load the user's own hardware-recorded WAVs, set/audition loop points
+(forward + ping-pong), save them back as a standard `smpl` chunk (loopStart,
+loopEnd, type, dwMIDIUnityNote, pitch fraction) + bext provenance. Its §1–§5
+requirements are `docs/LOOP_BENCH_SPEC.md` (the 2026-09-03 revision; the
+standalone "Loop Bench" app is cancelled). Output WAVs feed The Dreamer's ROM
+ingest (`C:	he-dreamer\ROM_REPLACEMENT.md`). The no-SF2-export rule stays
+ABSOLUTE: only Slot W can ever be saved. Focus switch R / W / SPLIT (default
+C4). Where this layer conflicts with an earlier phase plan, this layer wins.
+
 ## §0 Kickoff declarations (2026-08-30, vm-claude — operator to confirm; see PROJECT-NOTES OPEN QUESTIONS)
 
 | Declaration | Value | Why |
