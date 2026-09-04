@@ -29,7 +29,14 @@ ScoutEditor::ScoutEditor (ScoutProcessor& p)
 
     // header: focus switch R / W / SPLIT + split point (non-param state)
     addAndMakeVisible (focusSwitch_);
+    focusSwitch_.setTooltip ("Which slot the MIDI keyboard plays: the SF2 preset, the WAV, or SPLIT at the note in the box (below -> SF2, at/above -> WAV). An empty slot is greyed and falls back to the loaded one.");
     focusSwitch_.onChange = [this] (int i) { editWav ([i] (WavEditState& w) { w.focus = i; }); };
+    addAndMakeVisible (unloadSf2Button_);
+    unloadSf2Button_.setTooltip ("Unload the SoundFont: its voices stop, list and readout clear");
+    unloadSf2Button_.onClick = [this] { unloadSf2(); };
+    addAndMakeVisible (unloadWavButton_);
+    unloadWavButton_.setTooltip ("Unload the WAV: its voices stop, waveform clears (asks first if markers are unsaved)");
+    unloadWavButton_.onClick = [this] { unloadWav (true); };
     addAndMakeVisible (splitField_);
     splitField_.setTooltip ("SPLIT point (MIDI note): below -> R, at/above -> W");
     splitField_.onCommit = [this] (double v) { editWav ([v] (WavEditState& w) { w.splitNote = (int) std::llround (v); }); };
@@ -163,7 +170,7 @@ void ScoutEditor::resized()
     splitField_.setBounds (header.removeFromRight (44).withSizeKeepingCentre (44, 24));
     header.removeFromRight (6);
     auto focus = header.removeFromRight (focusSwitch_.preferredWidth());
-    focusSwitch_.setBounds (focus.withSizeKeepingCentre (focus.getWidth(), 30));
+    focusSwitch_.setBounds (focus.withSizeKeepingCentre (focus.getWidth(), 32));
 
     auto body = r.removeFromTop (kBodyH);
     auto presetCol = body.removeFromLeft (kPresetColW);
@@ -172,6 +179,8 @@ void ScoutEditor::resized()
     nextButton_.setBounds (listHeader.removeFromRight (24).withHeight (22));
     listHeader.removeFromRight (4);
     prevButton_.setBounds (listHeader.removeFromRight (24).withHeight (22));
+    listHeader.removeFromRight (10);
+    unloadSf2Button_.setBounds (listHeader.removeFromRight (58).withHeight (22));
     presetList_.setBounds (presetCol);
     readout_.setBounds (body);
 
@@ -186,6 +195,8 @@ void ScoutEditor::resized()
     wb.removeFromTop (10 + 12 + 6);
     auto ctl = wb.removeFromTop (26);
     loadWavButton_.setBounds (ctl.removeFromLeft (80));
+    ctl.removeFromLeft (6);
+    unloadWavButton_.setBounds (ctl.removeFromLeft (62));
     ctl.removeFromLeft (14 + 30);                              // gap + "LOOP" label
     loopModeSwitch_.setBounds (ctl.removeFromLeft (loopModeSwitch_.preferredWidth()));
     ctl.removeFromLeft (14);
@@ -237,8 +248,10 @@ void ScoutEditor::paint (juce::Graphics& g)
     g.setFont (smallLabel()); g.setColour (col::label);
     g.drawText ("MODE", modeArea.removeFromLeft (36), juce::Justification::centredLeft, false);
     hc.removeFromRight (18 + 44 + 6 + focusSwitch_.preferredWidth());
-    auto focusLabel = hc.removeFromRight (46);
-    g.drawText ("FOCUS", focusLabel, juce::Justification::centredLeft, false);
+    auto focusLabel = hc.removeFromRight (kKbLabelW);
+    g.setFont (smallLabel()); g.setColour (col::text2);
+    g.drawText ("KEYBOARD PLAYS:", focusLabel, juce::Justification::centredRight, false);
+    g.setColour (col::label);
     hc.removeFromRight (14);
     auto fileBlock = hc.withSizeKeepingCentre (hc.getWidth(), 30);
     g.drawText ("SOUNDFONT", fileBlock.removeFromTop (12), juce::Justification::centredLeft, false);
@@ -279,7 +292,7 @@ void ScoutEditor::paint (juce::Graphics& g)
     else { g.setColour (col::text); g.drawText (wavLabel_ + (proc_.wavDirty() ? juce::String::fromUTF8 ("  \xE2\x97\x8F unsaved") : juce::String()), wl, juce::Justification::centredRight, true); }
     wc.removeFromTop (6);
     auto wctl = wc.removeFromTop (26);
-    wctl.removeFromLeft (80 + 14);
+    wctl.removeFromLeft (80 + 6 + 62 + 14);
     g.setFont (smallLabel()); g.setColour (col::label);
     g.drawText ("LOOP", wctl.removeFromLeft (30), juce::Justification::centredLeft, false);
     wc.removeFromTop (6 + kWaveH + 6);
@@ -468,9 +481,60 @@ void ScoutEditor::rebuildForWav()
     descEditor_.setText (proc_.wavState().description, false);
     exportToggle_.setToggleState (proc_.wavState().export16BitMono, juce::dontSendNotification);
     shownWavNote_ = -2;
+    unloadWavButton_.setEnabled (w != nullptr);
+    unloadWavButton_.setAlpha (w != nullptr ? 1.0f : 0.4f);
     syncWavControls();
     refreshReadout (true);
     repaint();
+}
+
+void ScoutEditor::updateFocusEnables()
+{
+    const bool sf2 = proc_.hasSf2(), wav = proc_.hasWav();
+    focusSwitch_.setSegmentEnabled (0, sf2 || ! wav);       // with nothing loaded SF2 stays clickable (the default)
+    focusSwitch_.setSegmentEnabled (1, wav);
+    focusSwitch_.setSegmentEnabled (2, sf2 && wav);
+    focusSwitch_.setIndex (proc_.wavState().focus, false);
+    splitField_.setEnabled (sf2 && wav);
+    splitField_.setAlpha (sf2 && wav ? 1.0f : 0.5f);
+}
+
+// ------------------------------------------------------------------ UNLOAD
+void ScoutEditor::unloadSf2()
+{
+    if (! proc_.hasSf2()) return;
+    proc_.unloadSoundFont();
+    errorText_.clear();
+    rebuildForBank();
+}
+
+void ScoutEditor::unloadWav (bool askIfDirty)
+{
+    if (! proc_.hasWav()) return;
+    if (askIfDirty && proc_.wavDirty())
+    {
+        auto opts = juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::QuestionIcon)
+                        .withTitle ("Unsaved loop markers")
+                        .withMessage (juce::File (proc_.wavFilePath()).getFileName() + " has marker edits that are not saved.")
+                        .withButton ("Save").withButton ("Discard").withButton ("Cancel")
+                        .withAssociatedComponent (this);
+        juce::AlertWindow::showAsync (opts, [this] (int result)
+        {
+            if (result == 1)                                   // Save (then unload)
+            {
+                if (proc_.wavState().export16BitMono) { doSaveAs(); return; }   // async save-as: leave the slot loaded
+                doSave();
+                if (proc_.wavDirty()) return;                  // save failed: keep the slot
+                unloadWav (false);
+            }
+            else if (result == 2) unloadWav (false);           // Discard
+        });
+        return;
+    }
+    if (playButton_.getToggleState()) { proc_.auditionWav (kPlayNote, false); playButton_.setToggleState (false, juce::dontSendNotification); }
+    proc_.unloadWav();
+    setWavStatus ({}, false);
+    rebuildForWav();
 }
 
 void ScoutEditor::syncWavControls()
@@ -485,7 +549,7 @@ void ScoutEditor::syncWavControls()
     releaseField_.setValue (s.releaseMs);
     splitField_.setValue (s.splitNote);
     loopModeSwitch_.setIndex (s.loopMode, false);
-    focusSwitch_.setIndex (s.focus, false);
+    updateFocusEnables();
     waveform_.setLoop ((juce::int64) s.loopStart, (juce::int64) s.loopEnd);
     waveform_.setLoopEnabled (s.loopMode != 2);
     seam_.setLoop ((juce::int64) s.loopStart, (juce::int64) s.loopEnd);
@@ -585,6 +649,10 @@ void ScoutEditor::rebuildForBank()
         }
     presetList_.updateContent();
     if (getNumRows() > 0) presetList_.selectRow (proc_.presetIndex(), true, true);
+    else presetList_.deselectAllRows();
+    unloadSf2Button_.setEnabled (b != nullptr);
+    unloadSf2Button_.setAlpha (b != nullptr ? 1.0f : 0.4f);
+    updateFocusEnables();
     shownNote_ = -1;
     seenNoteSeq_ = proc_.engine().lastNote().sequence;
     refreshReadout (true);

@@ -80,7 +80,13 @@ private:
     juce::String fileLabel_, errorText_;
     ui::SegmentSwitch modeSwitch_ { { "AS-AUTHORED", "LOOP-ONLY" } };
     std::unique_ptr<juce::ParameterAttachment> modeAttachment_;
-    ui::SegmentSwitch focusSwitch_ { { "R", "W", "SPLIT" } };
+    ui::SegmentSwitch focusSwitch_ { { "SF2", "WAV", "SPLIT" }, 12.0f, 16 };   // "KEYBOARD PLAYS:"
+    static constexpr int kKbLabelW = 104;
+    void updateFocusEnables();
+    ui::FlatButton unloadSf2Button_ { "UNLOAD", ui::col::inset, ui::col::text2, ui::col::hoverBtn, 3.0f, ui::mono (10.0f, true), true };
+    ui::FlatButton unloadWavButton_ { "UNLOAD", ui::col::inset, ui::col::text2, ui::col::hoverBtn, 4.0f, ui::mono (10.0f, true), true };
+    void unloadSf2();
+    void unloadWav (bool askIfDirty);
     ui::NumField splitField_;
 
     // body

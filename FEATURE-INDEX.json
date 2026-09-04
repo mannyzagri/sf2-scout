@@ -222,5 +222,23 @@
       "ScoutEditor::refreshMidiDevices",
       "ScoutEditor::applyMidiDevice"
     ]
+  },
+  "UNLOAD: per-slot clear (engine + processor + editor)": {
+    "file": "Source/engine/ScoutEngine.cpp",
+    "symbols": [
+      "ScoutEngine::clearBank",
+      "ScoutEngine::clearWav",
+      "ScoutProcessor::unloadSoundFont",
+      "ScoutProcessor::unloadWav",
+      "ScoutEditor::unloadWav"
+    ]
+  },
+  "KEYBOARD PLAYS control, empty-slot fallback + normalisation": {
+    "file": "Source/PluginEditor.cpp",
+    "symbols": [
+      "ScoutEditor::updateFocusEnables",
+      "ScoutProcessor::normaliseFocus",
+      "ScoutEngine::routesToWav"
+    ]
   }
 }

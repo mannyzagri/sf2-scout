@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # SF2 Scout -- SoundFont audition/reference tool (VST3 + Standalone).
 # Naming contract: CLAUDE.md §"Naming contract". PLUGIN_CODE and PRODUCT_NAME
 # freeze at the first Cubase load.
-project(Sf2Scout VERSION 0.3.0 LANGUAGES C CXX)
+project(Sf2Scout VERSION 0.4.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

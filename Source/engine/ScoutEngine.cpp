@@ -44,8 +44,32 @@ WavSample* ScoutEngine::takeRetiredWav()
     return retiredWav_.exchange (nullptr, std::memory_order_acq_rel);
 }
 
+void ScoutEngine::clearBank()
+{
+    requested_.store (nullptr, std::memory_order_release);
+    delete pending_.exchange (nullptr, std::memory_order_acq_rel);   // a bank that never reached the audio thread
+    clearBank_.store (true, std::memory_order_release);
+}
+
+void ScoutEngine::clearWav()
+{
+    delete pendingWav_.exchange (nullptr, std::memory_order_acq_rel);
+    clearWav_.store (true, std::memory_order_release);
+}
+
 void ScoutEngine::consumePendingWav()
 {
+    if (clearWav_.load (std::memory_order_acquire))
+    {
+        // same one-retiree rule as a swap: wait for the collector if it is behind
+        if (activeWav_ != nullptr && retiredWav_.load (std::memory_order_acquire) != nullptr) return;
+        clearWav_.store (false, std::memory_order_release);
+        for (auto& v : voices_) if (v.isWav) v = Voice {};
+        lastWavPlayhead_.store (-1.0, std::memory_order_relaxed);
+        lastWavNote_.store (-1, std::memory_order_relaxed);
+        if (activeWav_ != nullptr) retiredWav_.store (activeWav_, std::memory_order_release);
+        activeWav_ = nullptr;
+    }
     if (pendingWav_.load (std::memory_order_acquire) == nullptr) return;
     if (activeWav_ != nullptr && retiredWav_.load (std::memory_order_acquire) != nullptr) return;
     WavSample* p = pendingWav_.exchange (nullptr, std::memory_order_acq_rel);
@@ -98,15 +122,24 @@ SoundFontBank* ScoutEngine::takeRetiredBank()
 
 void ScoutEngine::consumePendingBank()
 {
+    if (clearBank_.load (std::memory_order_acquire))
+    {
+        if (active_ != nullptr && retired_.load (std::memory_order_acquire) != nullptr) return;
+        clearBank_.store (false, std::memory_order_release);
+        for (auto& v : voices_) if (! v.isWav) v = Voice {};
+        lastPlayhead_.store (-1.0, std::memory_order_relaxed);
+        if (active_ != nullptr) retired_.store (active_, std::memory_order_release);
+        active_ = nullptr;
+    }
     if (pending_.load (std::memory_order_acquire) == nullptr) return;
     // Only one retiree can be parked. If the owner thread has not collected
     // the previous one yet, keep playing the current bank and retry next block.
     if (active_ != nullptr && retired_.load (std::memory_order_acquire) != nullptr) return;
     SoundFontBank* p = pending_.exchange (nullptr, std::memory_order_acq_rel);
     if (p == nullptr) return;
-    // Voices point into the old bank's pool: kill them before it goes away.
-    for (auto& v : voices_) v = Voice {};
-    activeVoices_.store (0, std::memory_order_relaxed);
+    // Voices point into the old bank's pool: kill them before it goes away
+    // (the WAV voices point elsewhere and keep playing).
+    for (auto& v : voices_) if (! v.isWav) v = Voice {};
     lastPlayhead_.store (-1.0, std::memory_order_relaxed);
     SoundFontBank* old = active_;
     active_ = p;
@@ -233,8 +266,10 @@ void ScoutEngine::noteOn (int note, int velocity)
     // this bank, pending_ is already null and this is a single relaxed atomic
     // load that returns immediately -- a no-op, not a duplicate consume.
     consumePendingBank();
+    consumePendingWav();
     if (note < 0 || note > 127 || velocity <= 0) return;
-    if (routesToWav ((Focus) focus_.load (std::memory_order_relaxed), split_.load (std::memory_order_relaxed), note))
+    if (routesToWav ((Focus) focus_.load (std::memory_order_relaxed), split_.load (std::memory_order_relaxed), note,
+                     active_ != nullptr, activeWav_ != nullptr))
     {
         noteOnWav (note, velocity);
         return;

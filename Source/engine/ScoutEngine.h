@@ -60,6 +60,10 @@ public:
     // takeRetiredBank() -- poll it from the same thread that called setBank().
     void setBank (SoundFontBank* bank);
     SoundFontBank* takeRetiredBank();
+    // UNLOAD: asks the audio thread to drop the bank (its voices die, the bank
+    // comes back through takeRetiredBank()). Any thread. clearWav() likewise.
+    void clearBank();
+    void clearWav();
     // Message-thread view of the currently *requested* bank (may lag the audio
     // thread by one block). Readout code uses this to resolve zone indices.
     const SoundFontBank* requestedBank() const { return requested_.load (std::memory_order_acquire); }
@@ -77,8 +81,17 @@ public:
     // playhead of the most recent WAV voice in frames, or -1 if none is sounding
     double lastWavPlayhead() const { return lastWavPlayhead_.load (std::memory_order_relaxed); }
     int    lastWavNote() const     { return lastWavNote_.load (std::memory_order_relaxed); }
-    // MIDI note -> slot, per the current focus/split (pure; used by the UI too)
+    // MIDI note -> slot, per the current focus/split (pure; used by the UI too).
+    // An EMPTY target slot falls back to the loaded one, so a focus left on
+    // WAV/SPLIT can never mute the SF2 (and vice versa) -- see noteOn().
     static bool routesToWav (Focus f, int split, int note) { return f == Focus::W || (f == Focus::Split && note >= split); }
+    static bool routesToWav (Focus f, int split, int note, bool haveSf2, bool haveWav)
+    {
+        bool toWav = routesToWav (f, split, note);
+        if (toWav && ! haveWav) toWav = false;
+        if (! toWav && ! haveSf2 && haveWav) toWav = true;
+        return toWav;
+    }
 
     // audio-thread API
     void setMode (PlayMode m)     { mode_ = m; }
@@ -152,6 +165,8 @@ private:
     std::atomic<SoundFontBank*> pending_  { nullptr };
     std::atomic<SoundFontBank*> retired_  { nullptr };
     std::atomic<const SoundFontBank*> requested_ { nullptr };
+    std::atomic<bool> clearBank_ { false };
+    std::atomic<bool> clearWav_  { false };
 
     // Slot W handoff + live edit state
     WavSample* activeWav_ = nullptr;                        // audio thread only

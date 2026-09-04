@@ -1058,6 +1058,101 @@ int main()
         CHECK (en.activeVoiceCount() == 0);
     }
 
+    SECTION ("focus-fallback");
+    {
+        // pure routing with empty slots: an empty target falls back to the loaded slot
+        CHECK (ScoutEngine::routesToWav (Focus::W, 60, 72, true, false) == false);      // WAV chosen, none loaded -> SF2
+        CHECK (ScoutEngine::routesToWav (Focus::Split, 60, 72, true, false) == false);  // SPLIT upper half, no WAV -> SF2
+        CHECK (ScoutEngine::routesToWav (Focus::R, 60, 72, false, true) == true);       // SF2 chosen, none loaded -> WAV
+        CHECK (ScoutEngine::routesToWav (Focus::Split, 60, 40, false, true) == true);   // SPLIT lower half, no SF2 -> WAV
+        CHECK (ScoutEngine::routesToWav (Focus::W, 60, 72, true, true) == true);        // both loaded: honoured
+        CHECK (ScoutEngine::routesToWav (Focus::Split, 60, 59, true, true) == false && ScoutEngine::routesToWav (Focus::Split, 60, 60, true, true) == true);
+        CHECK (ScoutEngine::routesToWav (Focus::W, 60, 72, false, false) == false);     // nothing loaded: nothing to do, no crash
+        // engine-level: focus W with only the SF2 loaded still plays the SF2 (the 0.3.0 "keyboard went silent" case)
+        std::string be; auto b = SoundFontBank::load (file.data(), file.size(), be);
+        ScoutEngine e; e.prepare (44100.0); e.setBank (b.release()); e.setPreset (0);
+        e.setFocus (Focus::W, 60);
+        e.noteOn (60, 100); render (e, 64);
+        CHECK (e.activeVoiceCount() == 1 && e.lastNote().note == 60 && e.lastWavNote() == -1);
+        // ...and once a WAV lands, the same focus routes to it
+        WavSpec sp; auto img = buildWav (indexRamp (1000), {}, sp);
+        std::string we; auto w = WavSample::load (img.data(), img.size(), "R_C4.wav", we);
+        e.setWav (w.release()); e.setWavLoop (100, 200, WavLoopMode::Forward); e.setWavFades (0.0, 80.0);
+        e.noteOn (72, 100); render (e, 64);
+        CHECK (e.lastWavNote() == 72 && e.activeVoiceCount() == 2);
+        // R focus with the WAV only: WAV plays
+        ScoutEngine e2; e2.prepare (44100.0);
+        auto w2 = WavSample::load (img.data(), img.size(), "R_C4.wav", we);
+        e2.setWav (w2.release()); e2.setFocus (Focus::R, 60);
+        e2.noteOn (60, 100); render (e2, 64);
+        CHECK (e2.lastWavNote() == 60 && e2.activeVoiceCount() == 1);
+    }
+
+    SECTION ("unload");
+    {
+        WavSpec sp; auto img = buildWav (indexRamp (1000), {}, sp);
+        ScoutEngine e; makeEngine (e, img, "R_C4.wav");
+        e.setWavLoop (100, 200, WavLoopMode::Forward);
+        e.setFocus (Focus::Split, 60);
+        e.noteOn (48, 100); e.noteOn (72, 100); render (e, 64);
+        CHECK (e.activeVoiceCount() == 2);
+        // clear the bank: only the SF2 voice dies, the bank is retired exactly once, the WAV keeps sounding
+        const SoundFontBank* bankPtr = e.requestedBank();
+        CHECK (bankPtr != nullptr);
+        e.clearBank();
+        CHECK (e.requestedBank() == nullptr);
+        CHECK (e.takeRetiredBank() == nullptr);                // not until the audio thread runs
+        auto out = render (e, 64);
+        CHECK (e.activeVoiceCount() == 1 && e.lastWavPlayhead() >= 0.0 && e.lastPlayhead() < 0.0);
+        SoundFontBank* rb = e.takeRetiredBank();
+        CHECK (rb == bankPtr);
+        delete rb;
+        CHECK (e.takeRetiredBank() == nullptr);
+        bool fin = true; for (float v : out) fin = fin && std::isfinite (v);
+        CHECK (fin);
+        // notes aimed at the empty R slot now fall back to the WAV; nothing crashes
+        e.noteOn (40, 100); render (e, 64);
+        CHECK (e.lastWavNote() == 40 && e.activeVoiceCount() == 2);
+        // clear the WAV too: everything silent, retiree collected once, further notes are no-ops
+        e.clearWav();
+        render (e, 64);
+        CHECK (e.activeVoiceCount() == 0 && e.lastWavPlayhead() < 0.0 && e.lastWavNote() == -1);
+        WavSample* rw = e.takeRetiredWav();
+        CHECK (rw != nullptr && rw->fileName == "R_C4.wav");
+        delete rw;
+        CHECK (e.takeRetiredWav() == nullptr);
+        e.noteOn (60, 100); e.noteOnWav (60, 100); out = render (e, 256);
+        CHECK (e.activeVoiceCount() == 0);
+        float peak = 0.0f; for (float v : out) peak = std::max (peak, std::fabs (v));
+        CHECK (peak == 0.0f);
+        // swap safety: clear while a retiree is still parked -> the clear waits, then completes once collected
+        std::string b1e, b2e;
+        auto b1 = SoundFontBank::load (file.data(), file.size(), b1e);
+        auto b2 = SoundFontBank::load (file.data(), file.size(), b2e);
+        e.setBank (b1.release()); render (e, 64);
+        e.setBank (b2.release()); render (e, 64);              // b1 parked in retired
+        e.setFocus (Focus::R, 60); e.noteOn (60, 100); render (e, 64);
+        CHECK (e.activeVoiceCount() == 1);
+        e.clearBank();
+        render (e, 64);                                        // retiree slot busy: clear deferred, b2 still plays
+        CHECK (e.activeVoiceCount() == 1);
+        delete e.takeRetiredBank();                            // collector catches up (b1)
+        render (e, 64);
+        CHECK (e.activeVoiceCount() == 0);
+        SoundFontBank* rb2 = e.takeRetiredBank();
+        CHECK (rb2 != nullptr);
+        delete rb2;
+        CHECK (e.takeRetiredBank() == nullptr);
+        // clear with a bank pending (never reached the audio thread): pending is dropped, no leak/double free
+        std::string b3e; auto b3 = SoundFontBank::load (file.data(), file.size(), b3e);
+        e.setBank (b3.release());
+        e.clearBank();
+        render (e, 64);
+        CHECK (e.takeRetiredBank() == nullptr && e.requestedBank() == nullptr);
+        e.noteOn (60, 100); render (e, 64);
+        CHECK (e.activeVoiceCount() == 0);
+    }
+
     std::printf ("%d checks, %d failures\n", g_checks, g_failed);
     if (g_failed == 0) std::printf ("ALL CHECKS PASSED\n");
     return g_failed == 0 ? 0 : 1;

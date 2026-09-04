@@ -2,6 +2,16 @@
 
 Convention: `C:\code-bank\templates\CHANGELOG-convention.md`. Prefix `SC`.
 
+## v0.4.0 — 2026-09-04 — KEYBOARD PLAYS control, empty-slot fallback, UNLOAD per slot (unreleased, not deployed)
+Host impact: reload instance (no param-list change)
+
+### Engine
+- [SC-020] FIX: with the focus left on WAV or SPLIT and no WAV loaded (or after a failed load), the keyboard went silent — routing sent the notes to an empty Slot W. `routesToWav` now falls back to the loaded slot at note time (WAV/SPLIT → SF2 when no WAV; SF2/SPLIT → WAV when no SF2), RT-safe; harness `[focus-fallback]`. Focus verification otherwise found the hardware path sound: standalone holder → processBlock → `noteOn` → focus atomics pushed by every state change; readout/playhead follow the sounding slot (R readout + loop bar for SF2, W column + waveform playhead for the WAV).
+- [SC-021] ADDED: `ScoutEngine::clearBank` / `clearWav` — UNLOAD path: the audio thread kills only that slot's voices and parks the data for the collector (same one-retiree rule as a swap; a clear waits if the collector is behind, a never-consumed pending bank is dropped). Bank swaps no longer kill WAV voices. Harness `[unload]`.
+### GUI
+- [SC-022] CHANGED: the header focus switch is now a labelled **KEYBOARD PLAYS: SF2 / WAV / SPLIT** segmented control (larger, accent highlight), split-note field beside SPLIT; WAV and SPLIT grey out (and refuse clicks) while no WAV is loaded, SF2 and SPLIT while no SF2 is loaded; the highlighted choice is normalised to a loaded slot on every load/unload so the control never shows a slot that is not the one sounding.
+- [SC-023] ADDED: UNLOAD buttons — Slot R (preset-list header) and Slot W (control row). Each stops the slot's voices via SC-021, clears list/readout or waveform/seam/fields, clears the stored path in the tree, unlatches PLAY C3 (W), and moves the KEYBOARD PLAYS choice to the other loaded slot. Unloading a WAV with unsaved marker edits asks Save / Discard / Cancel first. Harness 249 checks. Version 0.4.0.
+
 ## v0.3.0 — 2026-09-04 — operator feedback on 0.2.0: MIDI device, marker placement, PLAY (unreleased, not deployed)
 Host impact: reload instance (no param-list change)
 
@@ -43,7 +53,7 @@ Host impact: n/a (never loaded in a host yet)
 ### Infra
 - [SC-005] ADDED: scaffold — CLAUDE.md, SSOT.md (unsigned), PROJECT-NOTES STATE, validator.json (dsp/bundle/deploy/host), FEATURE-INDEX.json, comms/, share mailbox.
 
-## ITEM LEDGER (next free: SC-020)
+## ITEM LEDGER (next free: SC-024)
 | id | status | introduced | resolved | summary |
 |----|--------|-----------|----------|---------|
 | SC-001 | shipped | 0.1.0 | — | SF2 loading + zone table |
@@ -65,3 +75,7 @@ Host impact: n/a (never loaded in a host yet)
 | SC-017 | fixed | 0.2.0 | 0.3.0 | loop markers not positionable by mouse (grab-only, edge/off-screen lines) |
 | SC-018 | shipped | 0.3.0 | — | PLAY C3 latch button (Slot W) |
 | SC-019 | shipped | 0.3.0 | — | standalone MIDI input device selector; all inputs enabled by default |
+| SC-020 | fixed | 0.2.0 | 0.4.0 | focus on an empty slot muted the keyboard |
+| SC-021 | shipped | 0.4.0 | — | engine clearBank/clearWav (UNLOAD path) |
+| SC-022 | shipped | 0.4.0 | — | KEYBOARD PLAYS SF2/WAV/SPLIT control with disabled empty slots |
+| SC-023 | shipped | 0.4.0 | — | UNLOAD buttons per slot, save prompt on dirty WAV |

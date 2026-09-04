@@ -37,11 +37,16 @@ private:
 };
 
 // 2-segment switch (MODE): track #e2e2db, 1px #d0d0c8, r4, 2px pad, 2px gap.
-class SegmentSwitch : public juce::Component
+class SegmentSwitch : public juce::Component,
+                      public juce::SettableTooltipClient
 {
 public:
-    SegmentSwitch (juce::StringArray labels) : labels_ (std::move (labels)) {}
+    SegmentSwitch (juce::StringArray labels, float fontPx = 11.0f, int padX = 12)
+        : labels_ (std::move (labels)), fontPx_ (fontPx), padX_ (padX) { enabled_.insertMultiple (0, true, labels_.size()); }
     std::function<void (int)> onChange;
+    // a segment whose slot is empty is shown greyed and ignores clicks
+    void setSegmentEnabled (int i, bool on) { if (i >= 0 && i < enabled_.size() && enabled_[i] != on) { enabled_.set (i, on); repaint(); } }
+    bool segmentEnabled (int i) const { return i >= 0 && i < enabled_.size() && enabled_[i]; }
     void setIndex (int i, bool notify)
     {
         if (i == index_) return;
@@ -66,8 +71,9 @@ public:
         {
             const int w = segWidth (labels_[i]);
             juce::Rectangle<int> seg (x, 2, w, getHeight() - 4);
-            if (i == index_) { g.setColour (col::accent); g.fillRoundedRectangle (seg.toFloat(), 3.0f); }
-            g.setColour (i == index_ ? juce::Colours::white : col::text2);
+            const bool on = enabled_[i];
+            if (i == index_) { g.setColour (on ? col::accent : col::thumb); g.fillRoundedRectangle (seg.toFloat(), 3.0f); }
+            g.setColour (i == index_ ? juce::Colours::white : (on ? col::text2 : col::text3));
             g.setFont (segFont());
             g.drawText (labels_[i], seg, juce::Justification::centred, false);
             x += w + 2;
@@ -79,17 +85,20 @@ public:
         for (int i = 0; i < labels_.size(); ++i)
         {
             const int w = segWidth (labels_[i]);
-            if (e.x >= x && e.x < x + w) { setIndex (i, true); return; }
+            if (e.x >= x && e.x < x + w) { if (enabled_[i]) setIndex (i, true); return; }
             x += w + 2;
         }
     }
 private:
-    static juce::Font segFont() { juce::Font f = mono (11.0f, true); f.setExtraKerningFactor (0.04f); return f; }
-    static int segWidth (const juce::String& s)
+    juce::Font segFont() const { juce::Font f = mono (fontPx_, true); f.setExtraKerningFactor (0.04f); return f; }
+    int segWidth (const juce::String& s) const
     {
-        return (int) std::ceil (juce::GlyphArrangement::getStringWidth (segFont(), s)) + 24;   // padding 7px 12px
+        return (int) std::ceil (juce::GlyphArrangement::getStringWidth (segFont(), s)) + 2 * padX_;   // padding 7px 12px
     }
     juce::StringArray labels_;
+    juce::Array<bool> enabled_;
+    float fontPx_;
+    int padX_;
     int index_ = 0;
 };
 

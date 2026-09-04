@@ -72,6 +72,7 @@ public:
     // Loads a file. Returns an empty string on success, else the error message.
     // Never throws; on failure the previous bank stays loaded (spec §1).
     juce::String loadSoundFont (const juce::File& file);
+    void unloadSoundFont();               // kills Slot R voices via the engine, clears list/readout/path
     juce::String loadedFileName() const { return loadedFileName_; }
     juce::String loadedFilePath() const { return loadedFilePath_; }
 
@@ -108,6 +109,9 @@ public:
     juce::String saveWav (const juce::File& target);
     juce::File   wavSaveAsSuggestion() const;            // <PREFIX>_<NOTE>.wav next to the source
     bool wavDirty() const { return wavDirty_; }
+    void unloadWav();                     // kills Slot W voices via the engine, clears waveform/path
+    bool hasSf2() const { return uiBank_ != nullptr; }
+    bool hasWav() const { return uiWav_ != nullptr; }
 
     static constexpr const char* kBuildStamp = SF2SCOUT_VERSION_STRING " " __DATE__ " " __TIME__;
 
@@ -139,6 +143,7 @@ private:
     std::atomic<int> wavGeneration_ { 0 };
     juce::String midiInputDevice_;
     void pushWavState();
+    void normaliseFocus();                // focus on an empty slot -> the loaded one (mirrors the engine fallback)
     void readWavStateFrom (const juce::ValueTree& state);
 
     // F2: setStateInformation may run on any host thread; the actual load is

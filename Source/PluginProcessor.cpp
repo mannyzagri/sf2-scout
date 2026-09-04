@@ -171,6 +171,7 @@ juce::String ScoutProcessor::loadWav (const juce::File& file)
     pushWavState();
     engine_.setWav (wav.release());
     wavGeneration_.fetch_add (1, std::memory_order_acq_rel);
+    normaliseFocus();
     return {};
 }
 
@@ -293,7 +294,43 @@ juce::String ScoutProcessor::loadSoundFont (const juce::File& file)
     delete engine_.takeRetiredBank();
     engine_.setBank (bank.release());
     bankGeneration_.fetch_add (1, std::memory_order_acq_rel);
+    normaliseFocus();
     return {};
+}
+
+void ScoutProcessor::unloadSoundFont()
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    uiBank_ = nullptr;
+    loadedFileName_.clear();
+    loadedFilePath_.clear();
+    presetIndex_.store (0);
+    delete engine_.takeRetiredBank();
+    engine_.clearBank();                  // the audio thread kills the R voices and parks the bank for the collector
+    bankGeneration_.fetch_add (1, std::memory_order_acq_rel);
+    normaliseFocus();
+}
+
+void ScoutProcessor::unloadWav()
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    uiWav_ = nullptr;
+    wavFilePath_.clear();
+    wavDirty_ = false;
+    delete engine_.takeRetiredWav();
+    engine_.clearWav();
+    wavGeneration_.fetch_add (1, std::memory_order_acq_rel);
+    normaliseFocus();
+}
+
+void ScoutProcessor::normaliseFocus()
+{
+    // The engine already falls back at note time; this keeps the CONTROL honest
+    // so the operator never sees WAV highlighted while the SF2 is what sounds.
+    int f = wavState_.focus;
+    if (f != 0 && ! hasWav() && hasSf2()) f = 0;
+    else if (f != 1 && ! hasSf2() && hasWav()) f = 1;
+    if (f != wavState_.focus) { wavState_.focus = f; pushWavState(); }
 }
 
 void ScoutProcessor::setPresetIndex (int index)
