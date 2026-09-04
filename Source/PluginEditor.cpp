@@ -1,4 +1,7 @@
 #include "PluginEditor.h"
+#if JucePlugin_Build_Standalone
+ #include <juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h>
+#endif
 
 namespace sf2scout
 {
@@ -46,6 +49,11 @@ ScoutEditor::ScoutEditor (ScoutProcessor& p)
     }
     snapToggle_.setToggleState (true, juce::dontSendNotification);
     snapToggle_.onClick = [this] { waveform_.setSnap (snapToggle_.getToggleState()); };
+    // PLAY: latching C3 on the WAV regardless of focus; note-on/off travel the same FIFO as MIDI
+    playButton_.setClickingTogglesState (true);
+    playButton_.setTooltip ("Latch a C3 (MIDI 48) on the WAV, independent of MIDI and focus; unlatch = note-off (release fade)");
+    playButton_.onClick = [this] { proc_.auditionWav (kPlayNote, playButton_.getToggleState()); };
+    addAndMakeVisible (playButton_);
     exportToggle_.setTooltip ("SAVE AS re-encodes as 16-bit PCM mono (-3 dB fold) at the source rate; SAVE never degrades the source file");
     exportToggle_.onClick = [this] { editWav ([this] (WavEditState& w) { w.export16BitMono = exportToggle_.getToggleState(); }); };
     addAndMakeVisible (waveform_);
@@ -116,6 +124,18 @@ ScoutEditor::ScoutEditor (ScoutProcessor& p)
         midiCombo_.addItemList (ch->choices, 1);
     addAndMakeVisible (midiCombo_);
     midiAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc_.apvts(), ParamId::midiChannel, midiCombo_);
+    // MIDI input DEVICE: standalone only (a host feeds the VST3 its MIDI)
+    midiDeviceCombo_.setLookAndFeel (&chipLook_);
+    midiDeviceCombo_.setTooltip ("MIDI input device for the standalone (the plugin gets MIDI from the host)");
+    midiDeviceCombo_.onChange = [this]
+    {
+        const int row = midiDeviceCombo_.getSelectedItemIndex();
+        proc_.setMidiInputDevice (row > 0 && row < midiDeviceIds_.size() ? midiDeviceIds_[row] : juce::String());
+        applyMidiDevice();
+    };
+    addChildComponent (midiDeviceCombo_);
+    midiDeviceCombo_.setVisible (isStandalone());
+    if (isStandalone()) { refreshMidiDevices (true); applyMidiDevice(); }
 
     rebuildForBank();
     rebuildForWav();
@@ -127,6 +147,8 @@ ScoutEditor::~ScoutEditor()
     stopTimer();
     masterSlider_.setLookAndFeel (nullptr);
     midiCombo_.setLookAndFeel (nullptr);
+    midiDeviceCombo_.setLookAndFeel (nullptr);
+    if (playButton_.getToggleState()) proc_.auditionWav (kPlayNote, false);
 }
 
 // ------------------------------------------------------------------ layout
@@ -168,6 +190,8 @@ void ScoutEditor::resized()
     loopModeSwitch_.setBounds (ctl.removeFromLeft (loopModeSwitch_.preferredWidth()));
     ctl.removeFromLeft (14);
     snapToggle_.setBounds (ctl.removeFromLeft (110));
+    ctl.removeFromLeft (10);
+    playButton_.setBounds (ctl.removeFromLeft (80));
     saveButton_.setBounds (ctl.removeFromRight (60));
     ctl.removeFromRight (6);
     saveAsButton_.setBounds (ctl.removeFromRight (76));
@@ -194,6 +218,8 @@ void ScoutEditor::resized()
     midi.removeFromRight (110);
     midi.removeFromRight (16);
     midiCombo_.setBounds (midi.removeFromRight (76).withSizeKeepingCentre (76, 28));
+    footer.removeFromRight (8 + 44 + 6);                       // gap + "MIDI IN" label + gap
+    midiDeviceCombo_.setBounds (footer.removeFromRight (150).withSizeKeepingCentre (150, 28));
 }
 
 void ScoutEditor::paint (juce::Graphics& g)
@@ -308,8 +334,8 @@ void ScoutEditor::paint (juce::Graphics& g)
 
     // build stamp: "which build is this?" must take zero round-trips
     g.setFont (mono (9.0f)); g.setColour (col::text3);
-    g.drawText (juce::String ("v") + ScoutProcessor::kBuildStamp, getLocalBounds().removeFromBottom (kFooterH).reduced (16, 0).removeFromLeft (300).withTrimmedLeft (52 + 16 + 200 + 16 + 56).withTrimmedTop (2),
-                juce::Justification::centredLeft, false);
+    g.drawText (juce::String ("v") + ScoutProcessor::kBuildStamp, getLocalBounds().removeFromBottom (kFooterH).reduced (16, 0).removeFromLeft (isStandalone() ? 470 : 600).withTrimmedLeft (52 + 16 + 200 + 16 + 56).withTrimmedTop (2),
+                juce::Justification::centredLeft, true);
 }
 
 // ------------------------------------------------------------------ list
@@ -418,6 +444,7 @@ juce::Rectangle<int> ScoutEditor::wavBandBounds() const
 void ScoutEditor::rebuildForWav()
 {
     seenWavGeneration_ = proc_.wavGeneration();
+    if (playButton_.getToggleState()) playButton_.setToggleState (false, juce::dontSendNotification);
     const WavSample* w = proc_.wav();
     // one shared mono display copy for both views (nothing points into the engine-owned sample)
     if (w != nullptr)
@@ -564,6 +591,36 @@ void ScoutEditor::rebuildForBank()
     repaint();
 }
 
+// ------------------------------------------------------------------ MIDI device (standalone)
+void ScoutEditor::refreshMidiDevices (bool force)
+{
+    juce::StringArray ids { juce::String() }, names { "ALL MIDI INPUTS" };
+    for (const auto& d : juce::MidiInput::getAvailableDevices()) { ids.add (d.identifier); names.add (d.name); }
+    if (! force && ids == midiDeviceIds_) return;             // nothing plugged or unplugged
+    midiDeviceIds_ = ids;
+    midiDeviceCombo_.clear (juce::dontSendNotification);
+    for (int i = 0; i < names.size(); ++i) midiDeviceCombo_.addItem (names[i], i + 1);
+    const int row = juce::jmax (0, ids.indexOf (proc_.midiInputDevice()));   // a vanished device falls back to ALL
+    midiDeviceCombo_.setSelectedItemIndex (row, juce::dontSendNotification);
+    applyMidiDevice();                                          // re-enable after a replug
+}
+
+void ScoutEditor::applyMidiDevice()
+{
+   #if JucePlugin_Build_Standalone
+    // JUCE's standalone enables NO MIDI inputs by default (why a keyboard is
+    // silent out of the box). Enable the chosen one, or all when none is chosen;
+    // the holder already forwards every enabled input to processBlock.
+    if (auto* holder = juce::StandalonePluginHolder::getInstance())
+    {
+        const juce::String chosen = proc_.midiInputDevice();
+        const bool all = chosen.isEmpty() || ! midiDeviceIds_.contains (chosen);
+        for (const auto& d : juce::MidiInput::getAvailableDevices())
+            holder->deviceManager.setMidiInputDeviceEnabled (d.identifier, all || d.identifier == chosen);
+    }
+   #endif
+}
+
 // ------------------------------------------------------------------ polling
 void ScoutEditor::refreshReadout (bool force)
 {
@@ -626,6 +683,7 @@ void ScoutEditor::timerCallback()
 {
     if (proc_.bankGeneration() != seenBankGeneration_) rebuildForBank();
     if (proc_.wavGeneration() != seenWavGeneration_) rebuildForWav();
+    if (isStandalone() && ++midiPollTicks_ >= 30) { midiPollTicks_ = 0; refreshMidiDevices (false); }
     const double wph = proc_.engine().lastWavPlayhead();
     if (wph != shownWavPlayhead_)
     {

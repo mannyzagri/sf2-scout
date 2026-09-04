@@ -170,7 +170,9 @@
     "symbols": [
       "WaveformView",
       "SeamView",
-      "NumField"
+      "NumField",
+      "WaveformView::moveDragged",
+      "WaveformView::markerAt"
     ]
   },
   "readout W column": {
@@ -198,6 +200,27 @@
       "main",
       "buildWav",
       "findChunk"
+    ]
+  },
+  "loop marker hit-test / drag clamp math (JUCE-free)": {
+    "file": "Source/engine/LoopMarkers.h",
+    "symbols": [
+      "pickMarker",
+      "applyMarkerDrag"
+    ]
+  },
+  "PLAY C3 latch (forced Slot W note via the UI fifo)": {
+    "file": "Source/PluginProcessor.cpp",
+    "symbols": [
+      "ScoutProcessor::auditionWav",
+      "ScoutEngine::noteOnWav"
+    ]
+  },
+  "standalone MIDI input device selector": {
+    "file": "Source/PluginEditor.cpp",
+    "symbols": [
+      "ScoutEditor::refreshMidiDevices",
+      "ScoutEditor::applyMidiDevice"
     ]
   }
 }

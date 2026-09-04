@@ -8,6 +8,7 @@
 #pragma once
 #include "Palette.h"
 #include "../engine/NoteNames.h"
+#include "../engine/LoopMarkers.h"
 #include <functional>
 #include <memory>
 #include <vector>
@@ -75,6 +76,17 @@ public:
     std::function<void (juce::int64 start, juce::int64 end)> onLoopDragged;   // during a marker drag (already snapped)
     std::function<void (juce::int64 frame)> onCursor;                         // mouse position in frames (-1 = outside)
     std::function<void()> onWantsFocus;                                        // click -> give the editor the keyboard
+
+    // Marker interaction (root cause of the 0.2.0 "cannot drag" report: the ONLY
+    // placement path was grabbing a 2 px line within +-6 px, and the default
+    // whole-file loop puts those lines at x = 0 and x = width -- half clipped by
+    // the border -- or off-screen once zoomed in):
+    //   left click/drag        near a line (+-kGrabPx) -> drag that marker
+    //                          elsewhere               -> the NEARER marker jumps to the click and follows
+    //   right click/drag       -> always the END marker
+    //   shift-drag / middle    -> pan
+    static constexpr double kGrabPx = 8.0;
+    WaveformView() { setInterceptsMouseClicks (true, false); setMouseClickGrabsKeyboardFocus (false); }
 
     void setBuffer (DisplayBuffer b, double rate)
     {
@@ -189,53 +201,68 @@ public:
     void mouseMove (const juce::MouseEvent& e) override
     {
         if (onCursor) onCursor (frames_ > 0 ? juce::jlimit<juce::int64> (0, frames_ - 1, (juce::int64) frameAt (e.x)) : -1);
-        setMouseCursor (nearMarker (e.x) != 0 ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::NormalCursor);
+        setMouseCursor (markerAt (e.x, true) != Marker::None ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::CrosshairCursor);
     }
     void mouseExit (const juce::MouseEvent&) override { if (onCursor) onCursor (-1); }
     void mouseDown (const juce::MouseEvent& e) override
     {
         if (onWantsFocus) onWantsFocus();
         if (frames_ == 0) return;
-        dragging_ = e.mods.isShiftDown() ? 3 : nearMarker (e.x);
         panStart_ = viewStart_;
+        if (e.mods.isShiftDown() || e.mods.isMiddleButtonDown()) { dragging_ = Marker::None; panning_ = true; return; }
+        panning_ = false;
+        if (e.mods.isRightButtonDown()) { dragging_ = Marker::End; moveDragged (e.x); return; }
+        dragging_ = markerAt (e.x, true);                     // grabbed an existing line: it follows from here
+        if (dragging_ == Marker::None) { dragging_ = markerAt (e.x, false); moveDragged (e.x); }   // click-to-place the nearer one
     }
     void mouseDrag (const juce::MouseEvent& e) override
     {
         if (frames_ == 0) return;
-        if (dragging_ == 3)
+        if (panning_)
         {
             const double fpp = viewLen_ / (double) juce::jmax (1, getWidth());
             viewStart_ = juce::jlimit (0.0, (double) frames_ - viewLen_, panStart_ - e.getDistanceFromDragStartX() * fpp);
             repaint();
             return;
         }
-        if (dragging_ == 0) return;
-        juce::int64 f = juce::jlimit<juce::int64> (0, frames_ - 1, (juce::int64) std::llround (frameAt (e.x)));
-        if (snap_) f = snapToZero (f, juce::jmax<juce::int64> (4, (juce::int64) (viewLen_ / juce::jmax (1, getWidth()) * 6.0)));
-        juce::int64 s = loopStart_, en = loopEnd_;
-        if (dragging_ == 1) s = juce::jmin (f, en);
-        else                en = juce::jmax (f - 1, s);           // END marker sits after the last included sample
-        if (onLoopDragged) onLoopDragged (s, en);
-        if (onCursor) onCursor (f);
+        moveDragged (e.x);
     }
-    void mouseUp (const juce::MouseEvent&) override { dragging_ = 0; }
+    void mouseUp (const juce::MouseEvent&) override { dragging_ = Marker::None; panning_ = false; }
 
 private:
     float xOf (double frame) const { return (float) ((frame - viewStart_) / viewLen_ * (double) getWidth()); }
     double frameAt (int x) const { return viewStart_ + (double) x / (double) juce::jmax (1, getWidth()) * viewLen_; }
-    int nearMarker (int x) const
+    Marker markerAt (int x, bool strict) const
     {
-        if (frames_ == 0) return 0;
-        const float xs = xOf ((double) loopStart_), xe = xOf ((double) loopEnd_ + 1.0);
-        const float ds = std::fabs ((float) x - xs), de = std::fabs ((float) x - xe);
-        if (ds <= 6.0f && ds <= de) return 1;
-        if (de <= 6.0f) return 2;
-        return 0;
+        if (frames_ == 0) return Marker::None;
+        return pickMarker (xOf ((double) loopStart_), xOf ((double) loopEnd_ + 1.0), (double) x, kGrabPx, strict);
+    }
+    // moves the dragged marker to the frame under pixel x (snapped), clamped against the other marker
+    void moveDragged (int x)
+    {
+        if (dragging_ == Marker::None) return;
+        juce::int64 f = juce::jlimit<juce::int64> (0, frames_, (juce::int64) std::llround (frameAt (x)));
+        if (snap_)
+        {
+            // snap the frame the line represents (END's line is one past the last included sample)
+            const juce::int64 win = juce::jmax<juce::int64> (4, (juce::int64) (viewLen_ / juce::jmax (1, getWidth()) * 6.0));
+            f = snapToZero (juce::jlimit<juce::int64> (0, frames_ - 1, f), win);
+            if (dragging_ == Marker::End) f = juce::jmin (frames_, f + 1);
+        }
+        juce::int64 s = loopStart_, en = loopEnd_;
+        applyMarkerDrag (dragging_, f, s, en, frames_ - 1);
+        if (s != loopStart_ || en != loopEnd_)
+        {
+            loopStart_ = s; loopEnd_ = en; repaint();          // instant visual feedback; the owner echoes the same values back
+            if (onLoopDragged) onLoopDragged (s, en);
+        }
+        if (onCursor) onCursor (juce::jlimit<juce::int64> (0, frames_ - 1, f));
     }
     void drawMarker (juce::Graphics& g, double frame, juce::Colour c, const char* label, bool labelRight)
     {
-        const float x = xOf (frame);
+        float x = xOf (frame);
         if (x < -1.0f || x > (float) getWidth() + 1.0f) return;
+        x = juce::jlimit (1.0f, (float) getWidth() - 1.0f, x);    // a marker on the file edge stays visible inside the border
         g.setColour (c);
         g.fillRect (juce::Rectangle<float> (x - 1.0f, 0.0f, 2.0f, (float) getHeight()));
         g.setFont (mono (9.0f, true));
@@ -250,7 +277,8 @@ private:
     juce::int64 loopStart_ = 0, loopEnd_ = 0;
     double playhead_ = -1.0;
     bool snap_ = true, loopOn_ = true;
-    int dragging_ = 0;          // 1 start, 2 end, 3 pan
+    Marker dragging_ = Marker::None;
+    bool panning_ = false;
     double panStart_ = 0.0;
 };
 

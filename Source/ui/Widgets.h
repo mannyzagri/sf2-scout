@@ -17,14 +17,15 @@ public:
     void paintButton (juce::Graphics& g, bool over, bool down) override
     {
         auto r = getLocalBounds().toFloat();
-        g.setColour ((over || down) ? hover_ : bg_);
+        const bool on = getToggleState();      // latching buttons (PLAY) paint accent while on
+        g.setColour (on ? ((over || down) ? col::accentHov : col::accent) : ((over || down) ? hover_ : bg_));
         g.fillRoundedRectangle (r, radius_);
-        if (border_)
+        if (border_ && ! on)
         {
             g.setColour (col::control);
             g.drawRoundedRectangle (r.reduced (0.5f), radius_, 1.0f);
         }
-        g.setColour (fg_);
+        g.setColour (on ? juce::Colours::white : fg_);
         g.setFont (font_);
         g.drawText (getButtonText(), getLocalBounds(), juce::Justification::centred, false);
     }

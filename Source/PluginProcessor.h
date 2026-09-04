@@ -83,6 +83,13 @@ public:
     // UI-driven audition (zone strip click) -- queued to the audio thread.
     void auditionNote (int note, int velocity = 100);
     void auditionRelease (int note);
+    // Slot W PLAY button: forces the WAV regardless of focus. Same FIFO, RT-safe.
+    void auditionWav (int note, bool on, int velocity = 100);
+
+    // Standalone MIDI input device (identifier; "" = all devices). Non-param
+    // tree state; the editor applies it to the standalone's AudioDeviceManager.
+    juce::String midiInputDevice() const { return midiInputDevice_; }
+    void setMidiInputDevice (const juce::String& id) { midiInputDevice_ = id; }
 
     ScoutEngine& engine() { return engine_; }
     const ScoutEngine& engine() const { return engine_; }
@@ -130,6 +137,7 @@ private:
     WavEditState wavState_;
     bool wavDirty_ = false;
     std::atomic<int> wavGeneration_ { 0 };
+    juce::String midiInputDevice_;
     void pushWavState();
     void readWavStateFrom (const juce::ValueTree& state);
 
@@ -141,7 +149,7 @@ private:
     juce::ValueTree pendingRestoreTree_;
 
     // UI -> audio thread note queue (lock-free, single producer / single consumer)
-    struct UiNote { int note; int velocity; bool on; };
+    struct UiNote { int note; int velocity; bool on; bool wav; };
     juce::AbstractFifo uiNoteFifo_ { 64 };
     std::array<UiNote, 64> uiNotes_ {};
     std::atomic<bool> uiPanic_ { false };   // F10: set when auditionRelease can't queue a note-off

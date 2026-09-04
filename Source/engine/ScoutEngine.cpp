@@ -233,11 +233,10 @@ void ScoutEngine::noteOn (int note, int velocity)
     // this bank, pending_ is already null and this is a single relaxed atomic
     // load that returns immediately -- a no-op, not a duplicate consume.
     consumePendingBank();
-    consumePendingWav();
     if (note < 0 || note > 127 || velocity <= 0) return;
     if (routesToWav ((Focus) focus_.load (std::memory_order_relaxed), split_.load (std::memory_order_relaxed), note))
     {
-        if (activeWav_ != nullptr) startWavVoice (note, velocity);
+        noteOnWav (note, velocity);
         return;
     }
     if (active_ == nullptr) return;
@@ -264,6 +263,13 @@ void ScoutEngine::noteOn (int note, int velocity)
 
     for (int i = 0; i < n; ++i)
         startVoice (*zones[i], note, velocity);
+}
+
+void ScoutEngine::noteOnWav (int note, int velocity)
+{
+    consumePendingWav();
+    if (activeWav_ == nullptr || note < 0 || note > 127 || velocity <= 0) return;
+    startWavVoice (note, velocity);
 }
 
 void ScoutEngine::beginRelease (Voice& v)

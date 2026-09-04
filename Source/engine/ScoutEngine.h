@@ -85,6 +85,7 @@ public:
     void setPreset (int index)    { preset_ = index; }
     void setPitchBend (double semis) { bendSemis_ = semis; }
     void noteOn (int note, int velocity);
+    void noteOnWav (int note, int velocity);      // Slot W regardless of focus (PLAY button)
     void noteOff (int note);
     void allNotesOff();
     // Renders `numSamples` into left/right (ADDS to them). Applies `gain`.

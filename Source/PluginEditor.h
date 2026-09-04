@@ -67,6 +67,9 @@ private:
     void nudge (bool endMarker, juce::int64 delta);
     void doSave();
     void doSaveAs();
+    void refreshMidiDevices (bool force);      // standalone only: enumerate juce::MidiInput devices
+    void applyMidiDevice();                    // standalone only: enable the chosen device in the AudioDeviceManager
+    bool isStandalone() const { return proc_.wrapperType == juce::AudioProcessor::wrapperType_Standalone; }
     void setWavStatus (const juce::String& msg, bool isError);
     juce::Rectangle<int> wavBandBounds() const;
 
@@ -98,6 +101,8 @@ private:
     ui::FlatButton saveButton_    { "SAVE",     ui::col::accent, juce::Colours::white, ui::col::accentHov, 4.0f, ui::buttonFont() };
     ui::FlatButton saveAsButton_  { "SAVE AS",  ui::col::inset,  ui::col::text,       ui::col::hoverBtn,   4.0f, ui::buttonFont(), true };
     ui::SegmentSwitch loopModeSwitch_ { { "FWD", "PING-PONG", "OFF" } };
+    ui::FlatButton playButton_ { "PLAY C3", ui::col::inset, ui::col::text, ui::col::hoverBtn, 4.0f, ui::buttonFont(), true };
+    static constexpr int kPlayNote = 48;
     juce::ToggleButton snapToggle_ { "ZERO-X SNAP" };
     juce::ToggleButton exportToggle_ { "16-BIT MONO" };
     ui::WaveformView waveform_;
@@ -119,6 +124,9 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> masterAttachment_;
     juce::ComboBox midiCombo_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> midiAttachment_;
+    juce::ComboBox midiDeviceCombo_;           // standalone only
+    juce::StringArray midiDeviceIds_;          // identifier per combo row (row 0 = all devices)
+    int midiPollTicks_ = 0;
     juce::TooltipWindow tooltips_ { this, 400 };
 
     std::unique_ptr<juce::FileChooser> chooser_;

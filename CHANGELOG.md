@@ -2,6 +2,15 @@
 
 Convention: `C:\code-bank\templates\CHANGELOG-convention.md`. Prefix `SC`.
 
+## v0.3.0 — 2026-09-04 — operator feedback on 0.2.0: MIDI device, marker placement, PLAY (unreleased, not deployed)
+Host impact: reload instance (no param-list change)
+
+### GUI
+- [SC-017] FIX: loop markers could not be positioned by mouse — the only placement path was grabbing an existing 2 px line within ±6 px, and the default whole-file loop (no `smpl`) put those lines at x=0 / x=width (half clipped by the border) or off-screen once zoomed in. Now: left click anywhere places and drags the NEARER marker, click near a line (±8 px) grabs it, right-drag always moves END, shift/middle-drag pans; lines are clamped visible at the file edges; drag cursor on hover; markers echo into the loopStart/loopEnd/length fields live and typed values move the cursors. Hit-test/drag math is JUCE-free (`Source/engine/LoopMarkers.h`) and pinned by harness `[markers]`.
+- [SC-018] ADDED: latching PLAY C3 button in the Slot W band — note-on/off for MIDI 48 on the WAV regardless of focus, through the same lock-free FIFO as MIDI/zone-strip audition (`ScoutEngine::noteOnWav`); loop mode F/P/O and live marker edits apply while it plays; unlatch = release fade; a new WAV load unlatches it.
+### Infra
+- [SC-019] ADDED (standalone only): MIDI input DEVICE selector in the footer — enumerates `juce::MidiInput::getAvailableDevices()`, re-polls once a second (plug/unplug rebuilds the list, a vanished device falls back to ALL), remembered as non-param tree property `midiInputDevice`; enables the chosen (or all) inputs on the standalone's AudioDeviceManager. Root cause of the silent keyboard: JUCE's standalone enables NO MIDI inputs by default — now ALL are enabled unless one is chosen. Hidden in the VST3 (host feeds MIDI). Harness 217 checks. Version 0.3.0.
+
 ## v0.2.0 — 2026-09-04 — Slot W: WAV loop editing (unreleased, not deployed)
 Host impact: reload instance (no param-list change; editor now requests keyboard focus)
 
@@ -34,7 +43,7 @@ Host impact: n/a (never loaded in a host yet)
 ### Infra
 - [SC-005] ADDED: scaffold — CLAUDE.md, SSOT.md (unsigned), PROJECT-NOTES STATE, validator.json (dsp/bundle/deploy/host), FEATURE-INDEX.json, comms/, share mailbox.
 
-## ITEM LEDGER (next free: SC-017)
+## ITEM LEDGER (next free: SC-020)
 | id | status | introduced | resolved | summary |
 |----|--------|-----------|----------|---------|
 | SC-001 | shipped | 0.1.0 | — | SF2 loading + zone table |
@@ -53,3 +62,6 @@ Host impact: n/a (never loaded in a host yet)
 | SC-014 | shipped | 0.2.0 | — | header FOCUS switch, two-column readout |
 | SC-015 | shipped | 0.2.0 | — | v0.2.0, keyboard focus flag, Slot W state persistence |
 | SC-016 | deferred | 0.2.0 | — | EXPORT RANGE, SUGGEST, CLICK METER, AUTO-DETECT, A/B, kbd piano |
+| SC-017 | fixed | 0.2.0 | 0.3.0 | loop markers not positionable by mouse (grab-only, edge/off-screen lines) |
+| SC-018 | shipped | 0.3.0 | — | PLAY C3 latch button (Slot W) |
+| SC-019 | shipped | 0.3.0 | — | standalone MIDI input device selector; all inputs enabled by default |

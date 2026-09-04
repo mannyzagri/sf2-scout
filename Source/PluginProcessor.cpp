@@ -80,7 +80,9 @@ void ScoutProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         auto handle = [this] (int idx)
         {
             const UiNote& n = uiNotes_[(size_t) idx];
-            if (n.on) engine_.noteOn (n.note, n.velocity); else engine_.noteOff (n.note);
+            if (! n.on)       engine_.noteOff (n.note);
+            else if (n.wav)   engine_.noteOnWav (n.note, n.velocity);
+            else              engine_.noteOn (n.note, n.velocity);
         };
         for (int i = 0; i < size1; ++i) handle (start1 + i);
         for (int i = 0; i < size2; ++i) handle (start2 + i);
@@ -262,6 +264,7 @@ void ScoutProcessor::readWavStateFrom (const juce::ValueTree& state)
     s.export16BitMono = (bool) state.getProperty ("wavExport16Mono", s.export16BitMono);
     s.description = state.getProperty ("wavDescription", s.description).toString();
     s.prefix      = state.getProperty ("wavPrefix", s.prefix).toString();
+    midiInputDevice_ = state.getProperty ("midiInputDevice", midiInputDevice_).toString();
     setWavState (s);
     wavDirty_ = false;
 }
@@ -304,7 +307,15 @@ void ScoutProcessor::auditionNote (int note, int velocity)
 {
     int start1, size1, start2, size2;
     uiNoteFifo_.prepareToWrite (1, start1, size1, start2, size2);
-    if (size1 > 0) { uiNotes_[(size_t) start1] = { note, velocity, true }; uiNoteFifo_.finishedWrite (1); }
+    if (size1 > 0) { uiNotes_[(size_t) start1] = { note, velocity, true, false }; uiNoteFifo_.finishedWrite (1); }
+}
+
+void ScoutProcessor::auditionWav (int note, bool on, int velocity)
+{
+    if (! on) { auditionRelease (note); return; }
+    int start1, size1, start2, size2;
+    uiNoteFifo_.prepareToWrite (1, start1, size1, start2, size2);
+    if (size1 > 0) { uiNotes_[(size_t) start1] = { note, velocity, true, true }; uiNoteFifo_.finishedWrite (1); }
 }
 
 void ScoutProcessor::auditionRelease (int note)
@@ -313,7 +324,7 @@ void ScoutProcessor::auditionRelease (int note)
     // must never silently drop -- if the FIFO is full, panic-flag instead.
     int start1, size1, start2, size2;
     uiNoteFifo_.prepareToWrite (1, start1, size1, start2, size2);
-    if (size1 > 0) { uiNotes_[(size_t) start1] = { note, 0, false }; uiNoteFifo_.finishedWrite (1); }
+    if (size1 > 0) { uiNotes_[(size_t) start1] = { note, 0, false, false }; uiNoteFifo_.finishedWrite (1); }
     else uiPanic_.store (true, std::memory_order_relaxed);
 }
 
@@ -336,6 +347,7 @@ void ScoutProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("wavExport16Mono", wavState_.export16BitMono, nullptr);
     state.setProperty ("wavDescription", wavState_.description, nullptr);
     state.setProperty ("wavPrefix", wavState_.prefix, nullptr);
+    state.setProperty ("midiInputDevice", midiInputDevice_, nullptr);
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
 }

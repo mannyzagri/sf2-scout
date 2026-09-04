@@ -20,6 +20,7 @@
 #include "../Source/engine/SoundFontBank.h"
 #include "../Source/engine/ScoutEngine.h"
 #include "../Source/engine/WavSample.h"
+#include "../Source/engine/LoopMarkers.h"
 #include "../Source/engine/NoteNames.h"
 
 #include <cstdio>
@@ -1020,6 +1021,41 @@ int main()
         auto out5 = writeWav (*w, save);
         auto w5 = WavSample::load (out5.data(), out5.size(), "x.wav", we);
         CHECK (w5 != nullptr && w5->loopStart == 5990 && w5->loopEnd == 5999);
+    }
+
+    SECTION ("markers");
+    {
+        // hit-test: nearer line wins; strict mode needs +-grab
+        CHECK (pickMarker (100.0, 500.0, 104.0, 8.0, true)  == Marker::Start);
+        CHECK (pickMarker (100.0, 500.0, 507.0, 8.0, true)  == Marker::End);
+        CHECK (pickMarker (100.0, 500.0, 300.0, 8.0, true)  == Marker::None);      // nothing within 8 px
+        CHECK (pickMarker (100.0, 500.0, 300.0, 8.0, false) == Marker::Start);     // click-to-place: nearer (tie -> start)
+        CHECK (pickMarker (100.0, 500.0, 301.0, 8.0, false) == Marker::End);
+        CHECK (pickMarker (0.0, 888.0, 3.0, 8.0, true) == Marker::Start);          // whole-file default: edge lines still grabbable
+        CHECK (pickMarker (0.0, 888.0, 884.0, 8.0, true) == Marker::End);
+        // drag math: END's line is one past the last included sample
+        int64_t s = 100, e = 200;
+        applyMarkerDrag (Marker::End, 301, s, e, 999);   CHECK (s == 100 && e == 300);
+        applyMarkerDrag (Marker::Start, 150, s, e, 999); CHECK (s == 150 && e == 300);
+        applyMarkerDrag (Marker::Start, 900, s, e, 999); CHECK (s == 300 && e == 300);   // past END: clamped to it
+        applyMarkerDrag (Marker::End, 50, s, e, 999);    CHECK (s == 300 && e == 300);   // before START: clamped to it
+        applyMarkerDrag (Marker::End, 5000, s, e, 999);  CHECK (e == 999);               // past the file: last frame
+        applyMarkerDrag (Marker::Start, -7, s, e, 999);  CHECK (s == 0);
+        applyMarkerDrag (Marker::None, 5, s, e, 999);    CHECK (s == 0 && e == 999);     // no marker: no-op
+        applyMarkerDrag (Marker::End, 1000, s, e, 999);  CHECK (e == 999);               // the END line at frames == lastFrame+1 includes the last sample
+        int64_t s2 = 5, e2 = 5; applyMarkerDrag (Marker::End, 5, s2, e2, 9); CHECK (s2 == 5 && e2 == 5);   // one-frame loop stays valid
+        applyMarkerDrag (Marker::End, 0, s2, e2, -1); CHECK (s2 == 5 && e2 == 5);        // empty file: no-op
+        // PLAY-style forced W note: plays the WAV even in R focus, and note-off releases it
+        WavSpec sp; auto img = buildWav (indexRamp (1000), {}, sp);
+        ScoutEngine en; makeEngine (en, img, "R_C4.wav");
+        en.setFocus (Focus::R, 60);
+        en.setWavLoop (100, 200, WavLoopMode::Forward);
+        en.noteOnWav (48, 100);
+        render (en, 64);
+        CHECK (en.lastWavNote() == 48 && en.lastWavPlayhead() >= 0.0 && en.activeVoiceCount() == 1);
+        en.noteOff (48);
+        render (en, 8820);
+        CHECK (en.activeVoiceCount() == 0);
     }
 
     std::printf ("%d checks, %d failures\n", g_checks, g_failed);
