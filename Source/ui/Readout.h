@@ -22,7 +22,22 @@ struct ReadoutState
     PlayMode mode = PlayMode::AsAuthored;
     double playhead = -1.0;               // sample-relative, -1 = stopped
     juce::String presetLabel;             // precomputed "bank:program  Name" (or a dash), for the row header
+
+    // Slot W column (docs/SF2SCOUT_WAV_EXTENSION.md "two-column when both loaded")
+    struct WavInfo
+    {
+        juce::String file;
+        int root = 60; double cents = 0.0;
+        juce::int64 loopStart = 0, loopEnd = 0;   // inclusive
+        int mode = 0;                             // 0 fwd, 1 ping-pong, 2 off
+        juce::int64 frames = 0; double rate = 44100.0;
+        int lastNote = -1; bool stereo = false; int bits = 16; bool isFloat = false;
+    };
+    std::optional<WavInfo> wav;
 };
+
+// frequency of a MIDI note (+ cents) with A4 = 440
+inline double noteHz (double note) { return 440.0 * std::pow (2.0, (note - 69.0) / 12.0); }
 
 inline juce::String S (const std::string& s) { return juce::String::fromUTF8 (s.c_str()); }
 inline juce::String dash() { return juce::String::fromUTF8 ("\xE2\x80\x94"); }
@@ -41,6 +56,13 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto area = getLocalBounds().reduced (kPadX, 0).withTrimmedTop (kPadTop).withTrimmedBottom (kPadBottom);
+        if (st_.wav)
+        {
+            auto wArea = area.removeFromRight (kWavColW);
+            area.removeFromRight (kColGap);
+            g.setColour (col::hairline); g.fillRect (area.getRight() + kColGap / 2, area.getY(), 1, area.getHeight());
+            paintWavColumn (g, wArea);
+        }
         const Zone* z = st_.zone ? &(*st_.zone) : nullptr;
         const bool have = st_.note >= 0 && z != nullptr;
 
@@ -128,7 +150,61 @@ public:
         return juce::String (p.bank).paddedLeft ('0', 3) + ":" + juce::String (p.program).paddedLeft ('0', 3);
     }
 
+    static constexpr int kWavColW = 232, kColGap = 18;
+
 private:
+    void paintWavColumn (juce::Graphics& g, juce::Rectangle<int> a)
+    {
+        const auto& w = *st_.wav;
+        auto row = a.removeFromTop (kLabelRow);
+        g.setFont (smallLabel()); g.setColour (col::label);
+        g.drawText ("SLOT W " + dash() + " WORK WAV", row, juce::Justification::centredLeft, false);
+        a.removeFromTop (kGap);
+        auto big = a.removeFromTop (kBigRow);
+        const int semis = w.lastNote >= 0 ? w.lastNote - w.root : 0;
+        struct Field { juce::String label, value; juce::Colour colour; };
+        const Field fields[3] = {
+            { "PLAYED",  w.lastNote >= 0 ? S (noteName (w.lastNote)) : dash(), col::accent },
+            { "ROOT",    S (noteName (w.root)) + (std::fabs (w.cents) > 0.05 ? juce::String::formatted (" %+.0fc", w.cents) : juce::String()), col::text },
+            { "STRETCH", w.lastNote >= 0 ? juce::String (semis > 0 ? "+" : "") + juce::String (semis) + " st" : dash(), std::abs (semis) > 7 ? col::warn : col::text },
+        };
+        int x = big.getX();
+        for (const auto& f : fields)
+        {
+            const int tw = juce::jmax ((int) std::ceil (juce::GlyphArrangement::getStringWidth (mono (20.0f, true), f.value)),
+                                       (int) std::ceil (juce::GlyphArrangement::getStringWidth (smallLabel(), f.label)));
+            g.setFont (smallLabel()); g.setColour (col::label);
+            g.drawText (f.label, x, big.getY(), tw + 4, 12, juce::Justification::centredLeft, false);
+            g.setFont (mono (20.0f, true)); g.setColour (f.colour);
+            g.drawText (f.value, x, big.getY() + 15, tw + 4, 23, juce::Justification::centredLeft, false);
+            x += tw + 18;
+        }
+        a.removeFromTop (kGap);
+        // key/value list (samples first, ms + periods derived -- LOOP_BENCH_SPEC §5)
+        const juce::int64 len = w.loopEnd >= w.loopStart ? w.loopEnd - w.loopStart + 1 : 0;
+        const double period = w.rate / noteHz (w.root + w.cents / 100.0);
+        const double periods = period > 0.0 ? (double) len / period : 0.0;
+        const bool nearInt = std::fabs (periods - std::round (periods)) < 0.1;
+        const char* modeName[3] = { "forward", "ping-pong", "off (one-shot)" };
+        struct KV { juce::String k, v; juce::Colour c; };
+        const KV rows[] = {
+            { "file",       w.file, col::text },
+            { "loopStart",  juce::String (w.loopStart) + "  " + S (formatMs (samplesToMs ((double) w.loopStart, w.rate))), col::text },
+            { "loopEnd",    juce::String (w.loopEnd) + "  " + S (formatMs (samplesToMs ((double) w.loopEnd, w.rate))), col::text },
+            { "loop len",   juce::String (len) + "  " + S (formatMs (samplesToMs ((double) len, w.rate))) + "  " + juce::String (periods, 2) + " per", nearInt ? col::text : col::warn },
+            { "loop type",  modeName[juce::jlimit (0, 2, w.mode)], col::text },
+            { "length",     juce::String (w.frames) + "  " + S (formatMs (samplesToMs ((double) w.frames, w.rate))), col::text },
+            { "format",     juce::String ((int) w.rate) + " Hz  " + juce::String (w.bits) + (w.isFloat ? "f  " : "-bit  ") + (w.stereo ? "stereo" : "mono"), col::text },
+        };
+        g.setFont (mono (11.0f));
+        for (const auto& kv : rows)
+        {
+            auto line = a.removeFromTop (17);
+            g.setColour (col::label); g.drawText (kv.k, line.removeFromLeft (62), juce::Justification::centredLeft, false);
+            g.setColour (kv.c);       g.drawText (kv.v, line, juce::Justification::centredLeft, true);
+        }
+    }
+
     void paintBar (juce::Graphics& g, juce::Rectangle<int> bar, bool have, const Zone* z)
     {
         g.setColour (col::barBase);  g.fillRoundedRectangle (bar.toFloat(), 3.0f);

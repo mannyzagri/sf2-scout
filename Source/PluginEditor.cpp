@@ -7,8 +7,9 @@ using namespace ui;
 ScoutEditor::ScoutEditor (ScoutProcessor& p)
     : AudioProcessorEditor (p), proc_ (p)
 {
-    setSize (kWidth, kHeaderH + kBodyH + kZoneBandH + kFooterH);
+    setSize (kWidth, kHeaderH + kBodyH + kZoneBandH + kWavBandH + kFooterH);
     setResizable (false, false);
+    setWantsKeyboardFocus (true);      // F/P/O, marker nudge keys, Ctrl+S
 
     // header
     addAndMakeVisible (loadButton_);
@@ -22,6 +23,68 @@ ScoutEditor::ScoutEditor (ScoutProcessor& p)
         modeAttachment_->sendInitialUpdate();
         modeSwitch_.onChange = [this] (int i) { modeAttachment_->setValueAsCompleteGesture ((float) i); };
     }
+
+    // header: focus switch R / W / SPLIT + split point (non-param state)
+    addAndMakeVisible (focusSwitch_);
+    focusSwitch_.onChange = [this] (int i) { editWav ([i] (WavEditState& w) { w.focus = i; }); };
+    addAndMakeVisible (splitField_);
+    splitField_.setTooltip ("SPLIT point (MIDI note): below -> R, at/above -> W");
+    splitField_.onCommit = [this] (double v) { editWav ([v] (WavEditState& w) { w.splitNote = (int) std::llround (v); }); };
+
+    // Slot W band
+    addAndMakeVisible (loadWavButton_); loadWavButton_.onClick = [this] { chooseWav(); };
+    addAndMakeVisible (saveButton_);    saveButton_.onClick    = [this] { doSave(); };
+    addAndMakeVisible (saveAsButton_);  saveAsButton_.onClick  = [this] { doSaveAs(); };
+    addAndMakeVisible (loopModeSwitch_);
+    loopModeSwitch_.onChange = [this] (int i) { editWav ([i] (WavEditState& w) { w.loopMode = i; }); };
+    for (auto* t : { &snapToggle_, &exportToggle_ })
+    {
+        t->setColour (juce::ToggleButton::textColourId, col::text2);
+        t->setColour (juce::ToggleButton::tickColourId, col::accent);
+        t->setColour (juce::ToggleButton::tickDisabledColourId, col::control);
+        addAndMakeVisible (*t);
+    }
+    snapToggle_.setToggleState (true, juce::dontSendNotification);
+    snapToggle_.onClick = [this] { waveform_.setSnap (snapToggle_.getToggleState()); };
+    exportToggle_.setTooltip ("SAVE AS re-encodes as 16-bit PCM mono (-3 dB fold) at the source rate; SAVE never degrades the source file");
+    exportToggle_.onClick = [this] { editWav ([this] (WavEditState& w) { w.export16BitMono = exportToggle_.getToggleState(); }); };
+    addAndMakeVisible (waveform_);
+    addAndMakeVisible (seam_);
+    waveform_.onWantsFocus = [this] { grabKeyboardFocus(); };
+    waveform_.onCursor = [this] (juce::int64 f) { cursorFrame_ = f; repaint (wavBandBounds().removeFromBottom (8 + 14)); };
+    waveform_.onLoopDragged = [this] (juce::int64 a, juce::int64 b)
+    {
+        editWav ([a, b] (WavEditState& w) { w.loopStart = (uint32_t) juce::jmax<juce::int64> (0, a); w.loopEnd = (uint32_t) juce::jmax<juce::int64> (0, b); });
+    };
+    struct FieldDef { ui::NumField* f; const char* tip; };
+    for (auto d : { FieldDef { &startField_, "LOOP START (samples)" }, FieldDef { &endField_, "LOOP END (samples, last sample INCLUDED)" },
+                    FieldDef { &lenField_, "LOOP LENGTH (samples) -> moves LOOP END" }, FieldDef { &rootField_, "ROOT KEY (MIDI note, C4 = 60)" },
+                    FieldDef { &fineField_, "FINE TUNE (cents, -50..+50)" }, FieldDef { &attackField_, "ATTACK fade-in (ms)" }, FieldDef { &releaseField_, "RELEASE fade (ms); the loop keeps cycling under it" } })
+    {
+        d.f->setTooltip (d.tip);
+        addAndMakeVisible (*d.f);
+    }
+    startField_.onCommit   = [this] (double v) { editWav ([v] (WavEditState& w) { w.loopStart = (uint32_t) juce::jmax (0.0, v); if (w.loopEnd < w.loopStart) w.loopEnd = w.loopStart; }); };
+    endField_.onCommit     = [this] (double v) { editWav ([v] (WavEditState& w) { w.loopEnd = (uint32_t) juce::jmax (0.0, v); if (w.loopStart > w.loopEnd) w.loopStart = w.loopEnd; }); };
+    lenField_.onCommit     = [this] (double v) { editWav ([v] (WavEditState& w) { w.loopEnd = (uint32_t) ((double) w.loopStart + juce::jmax (1.0, v) - 1.0); }); };
+    rootField_.onCommit    = [this] (double v) { editWav ([v] (WavEditState& w) { w.rootKey = (int) std::llround (v); }); };
+    fineField_.onCommit    = [this] (double v) { editWav ([v] (WavEditState& w) { w.fineCents = v; }); };
+    attackField_.onCommit  = [this] (double v) { editWav ([v] (WavEditState& w) { w.attackMs = v; }); };
+    releaseField_.onCommit = [this] (double v) { editWav ([v] (WavEditState& w) { w.releaseMs = v; }); };
+    for (auto* t : { &prefixEditor_, &descEditor_ })
+    {
+        t->setFont (mono (12.0f));
+        t->setIndents (4, 3);
+        t->setColour (juce::TextEditor::backgroundColourId, col::inset);
+        t->setColour (juce::TextEditor::outlineColourId, col::control);
+        t->setColour (juce::TextEditor::focusedOutlineColourId, col::accent);
+        t->setColour (juce::TextEditor::textColourId, col::text);
+        addAndMakeVisible (*t);
+    }
+    prefixEditor_.setTextToShowWhenEmpty ("PREFIX", col::text3);
+    descEditor_.setTextToShowWhenEmpty ("bext description (provenance)", col::text3);
+    prefixEditor_.onTextChange = [this] { editWav ([this] (WavEditState& w) { w.prefix = prefixEditor_.getText().trim(); }); };
+    descEditor_.onTextChange   = [this] { editWav ([this] (WavEditState& w) { w.description = descEditor_.getText(); }); };
 
     // preset column
     addAndMakeVisible (prevButton_); prevButton_.onClick = [this] { stepPreset (-1); };
@@ -55,6 +118,7 @@ ScoutEditor::ScoutEditor (ScoutProcessor& p)
     midiAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc_.apvts(), ParamId::midiChannel, midiCombo_);
 
     rebuildForBank();
+    rebuildForWav();
     startTimerHz (30);
 }
 
@@ -73,6 +137,11 @@ void ScoutEditor::resized()
     loadButton_.setBounds (header.removeFromLeft (64).withSizeKeepingCentre (64, 30));
     auto right = header.removeFromRight (modeSwitch_.preferredWidth());
     modeSwitch_.setBounds (right.withSizeKeepingCentre (right.getWidth(), 30));
+    header.removeFromRight (36 + 10 + 18);                    // "MODE" label + gaps
+    splitField_.setBounds (header.removeFromRight (44).withSizeKeepingCentre (44, 24));
+    header.removeFromRight (6);
+    auto focus = header.removeFromRight (focusSwitch_.preferredWidth());
+    focusSwitch_.setBounds (focus.withSizeKeepingCentre (focus.getWidth(), 30));
 
     auto body = r.removeFromTop (kBodyH);
     auto presetCol = body.removeFromLeft (kPresetColW);
@@ -89,6 +158,34 @@ void ScoutEditor::resized()
     zoneStrip_.setBounds (band.removeFromTop (52));
     band.removeFromTop (4);
     zoneLabels_.setBounds (band.removeFromTop (28));
+
+    // Slot W band
+    auto wb = r.removeFromTop (kWavBandH).reduced (16, 0);
+    wb.removeFromTop (10 + 12 + 6);
+    auto ctl = wb.removeFromTop (26);
+    loadWavButton_.setBounds (ctl.removeFromLeft (80));
+    ctl.removeFromLeft (14 + 30);                              // gap + "LOOP" label
+    loopModeSwitch_.setBounds (ctl.removeFromLeft (loopModeSwitch_.preferredWidth()));
+    ctl.removeFromLeft (14);
+    snapToggle_.setBounds (ctl.removeFromLeft (110));
+    saveButton_.setBounds (ctl.removeFromRight (60));
+    ctl.removeFromRight (6);
+    saveAsButton_.setBounds (ctl.removeFromRight (76));
+    ctl.removeFromRight (12);
+    exportToggle_.setBounds (ctl.removeFromRight (110));
+    wb.removeFromTop (6);
+    waveform_.setBounds (wb.removeFromTop (kWaveH));
+    wb.removeFromTop (6);
+    auto lower = wb.removeFromTop (kLowerH);
+    seam_.setBounds (lower.removeFromLeft (kSeamW));
+    lower.removeFromLeft (12);
+    auto rowA = lower.removeFromTop (33).withTrimmedTop (11);
+    lower.removeFromTop (8);
+    auto rowB = lower.removeFromTop (33).withTrimmedTop (11);
+    auto place = [] (juce::Rectangle<int>& row, juce::Component& c, int w) { c.setBounds (row.removeFromLeft (w)); row.removeFromLeft (8); };
+    place (rowA, startField_, 96); place (rowA, endField_, 96); place (rowA, lenField_, 96); place (rowA, rootField_, 60); place (rowA, fineField_, 60);
+    place (rowB, attackField_, 60); place (rowB, releaseField_, 60); place (rowB, prefixEditor_, 130);
+    descEditor_.setBounds (rowB);
 
     auto footer = r.removeFromTop (kFooterH).reduced (16, 0);
     footer.removeFromLeft (52 + 16);                           // "MASTER" label + gap
@@ -113,6 +210,9 @@ void ScoutEditor::paint (juce::Graphics& g)
     auto modeArea = hc.removeFromRight (modeSwitch_.preferredWidth() + 10 + 36);
     g.setFont (smallLabel()); g.setColour (col::label);
     g.drawText ("MODE", modeArea.removeFromLeft (36), juce::Justification::centredLeft, false);
+    hc.removeFromRight (18 + 44 + 6 + focusSwitch_.preferredWidth());
+    auto focusLabel = hc.removeFromRight (46);
+    g.drawText ("FOCUS", focusLabel, juce::Justification::centredLeft, false);
     hc.removeFromRight (14);
     auto fileBlock = hc.withSizeKeepingCentre (hc.getWidth(), 30);
     g.drawText ("SOUNDFONT", fileBlock.removeFromTop (12), juce::Justification::centredLeft, false);
@@ -138,6 +238,51 @@ void ScoutEditor::paint (juce::Graphics& g)
     g.setFont (smallLabel()); g.setColour (col::label);
     g.drawText (juce::String::fromUTF8 ("ZONE MAP \xE2\x80\x94 CLICK A KEY TO AUDITION"), bandLabels, juce::Justification::centredLeft, false);
     g.drawText (juce::String (zoneStrip_.zoneCount()) + " ZONES", bandLabels, juce::Justification::centredRight, false);
+
+    // Slot W band
+    auto wband = r.removeFromTop (kWavBandH);
+    g.setColour (col::window); g.fillRect (wband);
+    g.setColour (col::borderSec); g.fillRect (wband.removeFromTop (1));
+    auto wc = wavBandBounds().reduced (16, 0);
+    wc.removeFromTop (10);
+    auto wl = wc.removeFromTop (12);
+    g.setFont (smallLabel()); g.setColour (col::label);
+    g.drawText (juce::String::fromUTF8 ("SLOT W \xE2\x80\x94 WORK WAV LOOP EDITOR"), wl.removeFromLeft (220), juce::Justification::centredLeft, false);
+    g.setFont (mono (11.0f, true));
+    if (wavStatus_.isNotEmpty()) { g.setColour (wavStatusIsError_ ? col::warn : col::okDot); g.drawText (wavStatus_, wl, juce::Justification::centredRight, true); }
+    else { g.setColour (col::text); g.drawText (wavLabel_ + (proc_.wavDirty() ? juce::String::fromUTF8 ("  \xE2\x97\x8F unsaved") : juce::String()), wl, juce::Justification::centredRight, true); }
+    wc.removeFromTop (6);
+    auto wctl = wc.removeFromTop (26);
+    wctl.removeFromLeft (80 + 14);
+    g.setFont (smallLabel()); g.setColour (col::label);
+    g.drawText ("LOOP", wctl.removeFromLeft (30), juce::Justification::centredLeft, false);
+    wc.removeFromTop (6 + kWaveH + 6);
+    auto lower = wc.removeFromTop (kLowerH);
+    lower.removeFromLeft (kSeamW + 12);
+    auto labA = lower.removeFromTop (11);
+    lower.removeFromTop (33 - 11 + 8);
+    auto labB = lower.removeFromTop (11);
+    g.setFont (smallLabel()); g.setColour (col::label);
+    auto lab = [&] (juce::Rectangle<int>& row, const char* text, int w) { g.drawText (text, row.removeFromLeft (w), juce::Justification::centredLeft, false); row.removeFromLeft (8); };
+    lab (labA, "LOOP START", 96); lab (labA, "LOOP END (INCL)", 96); lab (labA, "LOOP LEN", 96); lab (labA, "ROOT", 60); lab (labA, "FINE c", 60);
+    lab (labB, "ATTACK ms", 60); lab (labB, "RELEASE ms", 60); lab (labB, "SAVE AS PREFIX", 130); lab (labB, "BEXT DESCRIPTION", 200);
+    wc.removeFromTop (4);
+    auto status = wc.removeFromTop (14);
+    g.setFont (mono (10.0f)); g.setColour (col::text2);
+    juce::String st;
+    if (const auto* wv = proc_.wav())
+    {
+        const auto& ws = proc_.wavState();
+        const double rate = (double) wv->sampleRate;
+        if (cursorFrame_ >= 0) st << "cursor " << juce::String (cursorFrame_) << " smp  " << S (formatMs (samplesToMs ((double) cursorFrame_, rate))) << "   ";
+        const juce::int64 len = (juce::int64) ws.loopEnd - (juce::int64) ws.loopStart + 1;
+        const double period = rate / noteHz (ws.rootKey + ws.fineCents / 100.0);
+        st << "root " << S (noteName (ws.rootKey)) << "   loop " << juce::String (len) << " smp  " << S (formatMs (samplesToMs ((double) len, rate)))
+           << "  " << juce::String (len / period, 2) << " periods";
+    }
+    g.drawText (st, status.removeFromLeft (470), juce::Justification::centredLeft, true);
+    g.setColour (col::text3);
+    g.drawText (juce::String::fromUTF8 ("F/P/O loop \xC2\xB7 [ ] {} start \xC2\xB7 ; ' : \" end \xC2\xB7 wheel zoom, shift-drag pan \xC2\xB7 Ctrl+S save"), status, juce::Justification::centredRight, true);
 
     // footer
     auto footer = r.removeFromTop (kFooterH);
@@ -223,14 +368,163 @@ void ScoutEditor::chooseFile()
 
 bool ScoutEditor::isInterestedInFileDrag (const juce::StringArray& files)
 {
-    for (auto& f : files) if (f.endsWithIgnoreCase (".sf2")) return true;
+    for (auto& f : files) if (f.endsWithIgnoreCase (".sf2") || f.endsWithIgnoreCase (".wav")) return true;
     return false;
 }
 
 void ScoutEditor::filesDropped (const juce::StringArray& files, int, int)
 {
+    // route by extension: .sf2 -> Slot R, .wav -> Slot W (first of each)
+    bool gotSf2 = false, gotWav = false;
     for (auto& f : files)
-        if (f.endsWithIgnoreCase (".sf2")) { loadFile (juce::File (f)); return; }
+    {
+        if (! gotSf2 && f.endsWithIgnoreCase (".sf2")) { loadFile (juce::File (f)); gotSf2 = true; }
+        else if (! gotWav && f.endsWithIgnoreCase (".wav")) { loadWavFile (juce::File (f)); gotWav = true; }
+    }
+}
+
+// ------------------------------------------------------------------ Slot W
+void ScoutEditor::chooseWav()
+{
+    chooser_ = std::make_unique<juce::FileChooser> ("Load a WAV into Slot W", juce::File (proc_.wavFilePath()).getParentDirectory(), "*.wav;*.WAV");
+    chooser_->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+        [this] (const juce::FileChooser& fc)
+        {
+            const auto f = fc.getResult();
+            if (f.existsAsFile()) loadWavFile (f);
+        });
+}
+
+void ScoutEditor::loadWavFile (const juce::File& f)
+{
+    const juce::String err = proc_.loadWav (f);
+    if (err.isNotEmpty()) { setWavStatus ("ERROR: " + err, true); return; }
+    setWavStatus ({}, false);
+    rebuildForWav();
+    grabKeyboardFocus();
+}
+
+void ScoutEditor::setWavStatus (const juce::String& msg, bool isError)
+{
+    wavStatus_ = msg; wavStatusIsError_ = isError;
+    repaint (wavBandBounds());
+}
+
+juce::Rectangle<int> ScoutEditor::wavBandBounds() const
+{
+    return juce::Rectangle<int> (0, kHeaderH + kBodyH + kZoneBandH, kWidth, kWavBandH);
+}
+
+void ScoutEditor::rebuildForWav()
+{
+    seenWavGeneration_ = proc_.wavGeneration();
+    const WavSample* w = proc_.wav();
+    // one shared mono display copy for both views (nothing points into the engine-owned sample)
+    if (w != nullptr)
+    {
+        auto buf = std::make_shared<std::vector<float>> (w->frames);
+        const float* L = w->L(); const float* R = w->R();
+        const bool st = w->isStereo();
+        for (uint32_t i = 0; i < w->frames; ++i) (*buf)[i] = st ? 0.5f * (L[i] + R[i]) : L[i];
+        display_ = buf;
+        wavLabel_ = juce::File (proc_.wavFilePath()).getFileName();
+    }
+    else
+    {
+        display_.reset();
+        wavLabel_ = juce::String::fromUTF8 ("\xE2\x80\x94 no wav loaded \xE2\x80\x94");
+    }
+    const double rate = w != nullptr ? (double) w->sampleRate : 44100.0;
+    waveform_.setBuffer (display_, rate);
+    seam_.setBuffer (display_, rate);
+    prefixEditor_.setText (proc_.wavState().prefix, false);
+    descEditor_.setText (proc_.wavState().description, false);
+    exportToggle_.setToggleState (proc_.wavState().export16BitMono, juce::dontSendNotification);
+    shownWavNote_ = -2;
+    syncWavControls();
+    refreshReadout (true);
+    repaint();
+}
+
+void ScoutEditor::syncWavControls()
+{
+    const auto& s = proc_.wavState();
+    startField_.setValue ((double) s.loopStart);
+    endField_.setValue ((double) s.loopEnd);
+    lenField_.setValue ((double) s.loopEnd - (double) s.loopStart + 1.0);
+    rootField_.setValue (s.rootKey);
+    fineField_.setValue (s.fineCents);
+    attackField_.setValue (s.attackMs);
+    releaseField_.setValue (s.releaseMs);
+    splitField_.setValue (s.splitNote);
+    loopModeSwitch_.setIndex (s.loopMode, false);
+    focusSwitch_.setIndex (s.focus, false);
+    waveform_.setLoop ((juce::int64) s.loopStart, (juce::int64) s.loopEnd);
+    waveform_.setLoopEnabled (s.loopMode != 2);
+    seam_.setLoop ((juce::int64) s.loopStart, (juce::int64) s.loopEnd);
+    refreshReadout (true);
+    repaint (wavBandBounds().removeFromTop (10 + 12 + 6));
+    repaint (wavBandBounds().removeFromBottom (8 + 14));
+}
+
+void ScoutEditor::nudge (bool endMarker, juce::int64 delta)
+{
+    if (proc_.wav() == nullptr) return;
+    editWav ([endMarker, delta] (WavEditState& w)
+    {
+        if (endMarker) w.loopEnd   = (uint32_t) juce::jmax<juce::int64> ((juce::int64) w.loopStart, (juce::int64) w.loopEnd + delta);
+        else           w.loopStart = (uint32_t) juce::jlimit<juce::int64> (0, (juce::int64) w.loopEnd, (juce::int64) w.loopStart + delta);
+    });
+}
+
+bool ScoutEditor::keyPressed (const juce::KeyPress& k)
+{
+    if (k == juce::KeyPress ('s', juce::ModifierKeys::commandModifier, 0)) { doSave(); return true; }
+    if (k == juce::KeyPress ('s', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier, 0)) { doSaveAs(); return true; }
+    if (proc_.wav() == nullptr) return false;
+    switch (k.getTextCharacter())
+    {
+        case 'f': case 'F': editWav ([] (WavEditState& w) { w.loopMode = 0; }); return true;
+        case 'p': case 'P': editWav ([] (WavEditState& w) { w.loopMode = 1; }); return true;
+        case 'o': case 'O': editWav ([] (WavEditState& w) { w.loopMode = 2; }); return true;
+        case '[': nudge (false, -1);   return true;
+        case ']': nudge (false, +1);   return true;
+        case '{': nudge (false, -100); return true;
+        case '}': nudge (false, +100); return true;
+        case ';': nudge (true, -1);    return true;
+        case '\'': nudge (true, +1);   return true;
+        case ':': nudge (true, -100);  return true;
+        case '"': nudge (true, +100);  return true;
+        default: break;
+    }
+    return false;
+}
+
+void ScoutEditor::doSave()
+{
+    if (proc_.wav() == nullptr) { setWavStatus ("no WAV loaded", true); return; }
+    // the export checkbox never silently degrades the source: it routes SAVE to SAVE AS
+    if (proc_.wavState().export16BitMono) { doSaveAs(); return; }
+    const juce::File target (proc_.wavFilePath());
+    const juce::String err = proc_.saveWav (target);
+    if (err.isNotEmpty()) setWavStatus ("ERROR: " + err, true);
+    else setWavStatus ("saved " + target.getFileName() + "  (smpl " + juce::String ((int) proc_.wavState().loopStart) + ".." + juce::String ((int) proc_.wavState().loopEnd) + ")", false);
+}
+
+void ScoutEditor::doSaveAs()
+{
+    if (proc_.wav() == nullptr) { setWavStatus ("no WAV loaded", true); return; }
+    chooser_ = std::make_unique<juce::FileChooser> ("Save WAV with loop markers", proc_.wavSaveAsSuggestion(), "*.wav");
+    chooser_->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
+        [this] (const juce::FileChooser& fc)
+        {
+            auto f = fc.getResult();
+            if (f.getFullPathName().isEmpty()) return;
+            if (! f.hasFileExtension ("wav")) f = f.withFileExtension ("wav");
+            const juce::String err = proc_.saveWav (f);
+            if (err.isNotEmpty()) setWavStatus ("ERROR: " + err, true);
+            else { setWavStatus ("saved " + f.getFileName(), false); wavLabel_ = juce::File (proc_.wavFilePath()).getFileName(); }
+        });
 }
 
 void ScoutEditor::loadFile (const juce::File& f)
@@ -278,7 +572,9 @@ void ScoutEditor::refreshReadout (bool force)
     const int mode = juce::roundToInt (proc_.apvts().getRawParameterValue (ParamId::mode)->load());
     const double playhead = proc_.engine().lastPlayhead();
     const bool newNote = info.sequence != seenNoteSeq_;
-    if (! force && ! newNote && shownPlayhead_ == playhead && shownMode_ == mode) return;
+    const int wavNote = proc_.engine().lastWavNote();
+    if (! force && ! newNote && shownPlayhead_ == playhead && shownMode_ == mode && shownWavNote_ == wavNote) return;
+    shownWavNote_ = wavNote;
 
     ReadoutState s;
     s.presetIndex = proc_.presetIndex();
@@ -306,6 +602,17 @@ void ScoutEditor::refreshReadout (bool force)
             s.zone = *zp;
         if (newNote) shownPreset_ = pi;
     }
+    if (const WavSample* w = proc_.wav())
+    {
+        const auto& ws = proc_.wavState();
+        ReadoutState::WavInfo wi;
+        wi.file = juce::File (proc_.wavFilePath()).getFileName();
+        wi.root = ws.rootKey; wi.cents = ws.fineCents;
+        wi.loopStart = (juce::int64) ws.loopStart; wi.loopEnd = (juce::int64) ws.loopEnd; wi.mode = ws.loopMode;
+        wi.frames = (juce::int64) w->frames; wi.rate = (double) w->sampleRate;
+        wi.lastNote = wavNote; wi.stereo = w->isStereo(); wi.bits = w->bitsPerSample; wi.isFloat = w->formatTag == 3;
+        s.wav = wi;
+    }
     shownPlayhead_ = playhead;
     shownMode_ = mode;
     readout_.update (s);
@@ -318,6 +625,14 @@ void ScoutEditor::refreshReadout (bool force)
 void ScoutEditor::timerCallback()
 {
     if (proc_.bankGeneration() != seenBankGeneration_) rebuildForBank();
+    if (proc_.wavGeneration() != seenWavGeneration_) rebuildForWav();
+    const double wph = proc_.engine().lastWavPlayhead();
+    if (wph != shownWavPlayhead_)
+    {
+        shownWavPlayhead_ = wph;
+        waveform_.setPlayhead (wph);
+        seam_.setPlayhead (wph);
+    }
     refreshReadout (false);
     const int v = proc_.engine().activeVoiceCount();
     if (v != shownVoices_) { shownVoices_ = v; repaint (getLocalBounds().removeFromBottom (kFooterH)); }

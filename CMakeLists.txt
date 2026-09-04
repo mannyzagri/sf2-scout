@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # SF2 Scout -- SoundFont audition/reference tool (VST3 + Standalone).
 # Naming contract: CLAUDE.md §"Naming contract". PLUGIN_CODE and PRODUCT_NAME
 # freeze at the first Cubase load.
-project(Sf2Scout VERSION 0.1.0 LANGUAGES C CXX)
+project(Sf2Scout VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -37,7 +37,7 @@ juce_add_plugin(Sf2Scout
     NEEDS_MIDI_INPUT         TRUE
     NEEDS_MIDI_OUTPUT        FALSE
     IS_MIDI_EFFECT           FALSE
-    EDITOR_WANTS_KEYBOARD_FOCUS FALSE
+    EDITOR_WANTS_KEYBOARD_FOCUS TRUE      # Slot W: F/P/O, nudge keys, Ctrl+S live on the editor
     VST3_CATEGORIES          Instrument Sampler
     COPY_PLUGIN_AFTER_BUILD  FALSE)
 
@@ -45,7 +45,8 @@ target_sources(Sf2Scout PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
     Source/engine/SoundFontBank.cpp
-    Source/engine/ScoutEngine.cpp)
+    Source/engine/ScoutEngine.cpp
+    Source/engine/WavSample.cpp)
 
 target_include_directories(Sf2Scout PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
 

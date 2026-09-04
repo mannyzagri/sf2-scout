@@ -18,6 +18,7 @@
 #pragma once
 
 #include "SoundFontBank.h"
+#include "WavSample.h"
 #include <atomic>
 #include <array>
 #include <cstdint>
@@ -26,6 +27,11 @@ namespace sf2scout
 {
 
 enum class PlayMode : int { AsAuthored = 0, LoopOnly = 1 };
+
+// Slot W (docs/SF2SCOUT_WAV_EXTENSION.md): the WAV is one more sample source
+// for the SAME voice pool. Focus decides which slot a key plays.
+enum class Focus : int { R = 0, W = 1, Split = 2 };
+enum class WavLoopMode : int { Forward = 0, PingPong = 1, Off = 2 };
 
 struct LastNoteInfo
 {
@@ -57,6 +63,22 @@ public:
     // Message-thread view of the currently *requested* bank (may lag the audio
     // thread by one block). Readout code uses this to resolve zone indices.
     const SoundFontBank* requestedBank() const { return requested_.load (std::memory_order_acquire); }
+
+    // ---- Slot W. Same handoff contract as the bank: ownership passes in,
+    // the retiree comes back through takeRetiredWav() on the caller's thread.
+    void setWav (WavSample* wav);
+    WavSample* takeRetiredWav();
+    // Live editing state, any thread -> read by the audio thread at the top of
+    // each process() (loop points packed into ONE atomic so they never tear).
+    void setWavLoop (uint32_t startFrame, uint32_t endFrameInclusive, WavLoopMode mode);
+    void setWavTuning (int rootKey, double fineCents);
+    void setWavFades (double attackMs, double releaseMs);
+    void setFocus (Focus f, int splitNote);
+    // playhead of the most recent WAV voice in frames, or -1 if none is sounding
+    double lastWavPlayhead() const { return lastWavPlayhead_.load (std::memory_order_relaxed); }
+    int    lastWavNote() const     { return lastWavNote_.load (std::memory_order_relaxed); }
+    // MIDI note -> slot, per the current focus/split (pure; used by the UI too)
+    static bool routesToWav (Focus f, int split, int note) { return f == Focus::W || (f == Focus::Split && note >= split); }
 
     // audio-thread API
     void setMode (PlayMode m)     { mode_ = m; }
@@ -101,12 +123,21 @@ private:
         float    fade     = 1.0f;     // release multiplier
         float    fadeStep = 0.0f;
         bool     isLatest = false;
+        // Slot W voice
+        bool     isWav    = false;
+        int      dir      = 1;        // ping-pong direction (+1 / -1)
+        float    attack   = 1.0f;     // attack fade-in multiplier
+        float    attackStep = 0.0f;
     };
 
     void startVoice (const Zone& z, int note, int velocity);
+    void startWavVoice (int note, int velocity);
     void renderVoice (Voice& v, float* left, float* right, int numSamples, float gain);
+    void renderWavVoice (Voice& v, float* left, float* right, int numSamples, float gain);
     Voice* allocateVoice();
     void consumePendingBank();
+    void consumePendingWav();
+    void beginRelease (Voice& v);
 
     std::array<Voice, kMaxVoices> voices_;
     double   sampleRate_ = 44100.0;
@@ -120,6 +151,24 @@ private:
     std::atomic<SoundFontBank*> pending_  { nullptr };
     std::atomic<SoundFontBank*> retired_  { nullptr };
     std::atomic<const SoundFontBank*> requested_ { nullptr };
+
+    // Slot W handoff + live edit state
+    WavSample* activeWav_ = nullptr;                        // audio thread only
+    std::atomic<WavSample*> pendingWav_ { nullptr };
+    std::atomic<WavSample*> retiredWav_ { nullptr };
+    std::atomic<uint64_t>   wavLoop_    { 0 };              // (start << 32) | endInclusive
+    std::atomic<int>        wavLoopMode_ { (int) WavLoopMode::Forward };
+    std::atomic<int>        wavRoot_    { 60 };
+    std::atomic<double>     wavCents_   { 0.0 };
+    std::atomic<double>     wavAttackMs_  { 5.0 };
+    std::atomic<double>     wavReleaseMs_ { 80.0 };
+    std::atomic<int>        focus_      { (int) Focus::R };
+    std::atomic<int>        split_      { 60 };
+    // per-block snapshot of the loop state (audio thread only)
+    double curLoopStart_ = 0.0, curLoopEnd_ = 0.0;          // frames, end inclusive
+    WavLoopMode curLoopMode_ = WavLoopMode::Forward;
+    std::atomic<double>     lastWavPlayhead_ { -1.0 };
+    std::atomic<int>        lastWavNote_ { -1 };
 
     // published state
     std::atomic<int>      activeVoices_ { 0 };

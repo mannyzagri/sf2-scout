@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "engine/NoteNames.h"
 
 namespace sf2scout
 {
@@ -34,6 +35,7 @@ ScoutProcessor::~ScoutProcessor()
 {
     stopTimer();
     delete engine_.takeRetiredBank();
+    delete engine_.takeRetiredWav();
 }
 
 void ScoutProcessor::prepareToPlay (double sampleRate, int)
@@ -129,6 +131,139 @@ void ScoutProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 void ScoutProcessor::timerCallback()
 {
     delete engine_.takeRetiredBank();
+    delete engine_.takeRetiredWav();
+}
+
+// ------------------------------------------------------------------ Slot W
+juce::String ScoutProcessor::loadWav (const juce::File& file)
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    if (! file.existsAsFile())
+        return "file not found: " + file.getFullPathName();
+    juce::MemoryBlock bytes;
+    if (! file.loadFileAsData (bytes))
+        return "could not read " + file.getFileName();
+    std::string err;
+    auto wav = WavSample::load (bytes.getData(), bytes.getSize(), file.getFileName().toStdString(), err);
+    if (wav == nullptr)
+        return file.getFileName() + ": " + juce::String (err);
+
+    // the file's own metadata seeds the editor state; focus/split/fades/prefix persist across loads
+    wavState_.loopStart = wav->loopStart;
+    wavState_.loopEnd   = wav->loopEnd;
+    wavState_.loopMode  = wav->hasSmpl ? (wav->loopType == 1 ? 1 : 0) : 0;
+    wavState_.rootKey   = wav->rootKey;
+    wavState_.fineCents = wav->fineCents;
+    wavState_.description = juce::String::fromUTF8 (wav->bextDescription.c_str());
+    if (wavState_.prefix.isEmpty())
+    {
+        // "<PREFIX>_<NOTE>" -> remember the prefix for SAVE AS
+        const juce::String stem = file.getFileNameWithoutExtension();
+        const int us = stem.lastIndexOfChar ('_');
+        wavState_.prefix = (us > 0 && rootFromFileName (file.getFileName().toStdString()) >= 0) ? stem.substring (0, us) : stem;
+    }
+    uiWav_ = wav.get();
+    wavFilePath_ = file.getFullPathName();
+    wavDirty_ = false;
+    delete engine_.takeRetiredWav();
+    pushWavState();
+    engine_.setWav (wav.release());
+    wavGeneration_.fetch_add (1, std::memory_order_acq_rel);
+    return {};
+}
+
+void ScoutProcessor::setWavState (const WavEditState& s)
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    WavEditState n = s;
+    const uint32_t last = uiWav_ != nullptr && uiWav_->frames > 0 ? uiWav_->frames - 1 : 0;
+    n.loopStart = juce::jmin (n.loopStart, last);
+    n.loopEnd   = juce::jlimit (n.loopStart, last, n.loopEnd);
+    n.loopMode  = juce::jlimit (0, 2, n.loopMode);
+    n.rootKey   = juce::jlimit (0, 127, n.rootKey);
+    if (! std::isfinite (n.fineCents)) n.fineCents = 0.0;
+    n.fineCents = juce::jlimit (-50.0, 49.99, n.fineCents);
+    n.attackMs  = juce::jlimit (0.0, 500.0, n.attackMs);
+    n.releaseMs = juce::jlimit (10.0, 5000.0, n.releaseMs);
+    n.focus     = juce::jlimit (0, 2, n.focus);
+    n.splitNote = juce::jlimit (0, 127, n.splitNote);
+    if (n.loopStart != wavState_.loopStart || n.loopEnd != wavState_.loopEnd || n.loopMode != wavState_.loopMode
+        || n.rootKey != wavState_.rootKey || n.fineCents != wavState_.fineCents || n.description != wavState_.description)
+        wavDirty_ = uiWav_ != nullptr;
+    wavState_ = n;
+    pushWavState();
+}
+
+void ScoutProcessor::pushWavState()
+{
+    engine_.setWavLoop (wavState_.loopStart, wavState_.loopEnd, (WavLoopMode) wavState_.loopMode);
+    engine_.setWavTuning (wavState_.rootKey, wavState_.fineCents);
+    engine_.setWavFades (wavState_.attackMs, wavState_.releaseMs);
+    engine_.setFocus ((Focus) wavState_.focus, wavState_.splitNote);
+}
+
+juce::String ScoutProcessor::saveWav (const juce::File& target)
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    // The ONLY write path in the project, and it can only serialise a WavSample
+    // (the user's own file) -- SF2 pool data has no route here (CLAUDE.md §2.1).
+    if (uiWav_ == nullptr) return "no WAV loaded";
+    if (target.getFullPathName().isEmpty()) return "no target";
+    if (! target.hasFileExtension ("wav")) return "target must be a .wav";
+    WavSaveSpec spec;
+    spec.loopStart = wavState_.loopStart;
+    spec.loopEnd   = wavState_.loopEnd;
+    spec.loopType  = wavState_.loopMode == 1 ? 1 : 0;
+    spec.rootKey   = wavState_.rootKey;
+    spec.fineCents = wavState_.fineCents;
+    spec.export16BitMono = wavState_.export16BitMono;
+    juce::String desc = wavState_.description.trim();
+    const juce::String stamp = "SF2 Scout v" SF2SCOUT_VERSION_STRING " " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d")
+        + " loop=" + juce::String ((int) spec.loopStart) + ".." + juce::String ((int) spec.loopEnd)
+        + (spec.loopType == 1 ? " pingpong" : " fwd")
+        + " root=" + juce::String (spec.rootKey) + (std::fabs (spec.fineCents) > 0.005 ? juce::String::formatted ("%+.1fc", spec.fineCents) : juce::String())
+        + " att=" + juce::String ((int) wavState_.attackMs) + "ms rel=" + juce::String ((int) wavState_.releaseMs) + "ms";
+    desc = desc.isEmpty() ? stamp : desc + " | " + stamp;
+    spec.description = desc.toStdString().substr (0, 255);
+    const std::vector<uint8_t> bytes = writeWav (*uiWav_, spec);
+    juce::TemporaryFile tmp (target);
+    {
+        juce::FileOutputStream out (tmp.getFile());
+        if (! out.openedOk() || ! out.write (bytes.data(), bytes.size())) return "could not write " + target.getFileName();
+        out.flush();
+    }
+    if (! tmp.overwriteTargetFileWithTemporary()) return "could not replace " + target.getFileName();
+    wavDirty_ = false;
+    // a SAVE AS (not an export) becomes the working file for the next Ctrl+S
+    if (! spec.export16BitMono) wavFilePath_ = target.getFullPathName();
+    return {};
+}
+
+juce::File ScoutProcessor::wavSaveAsSuggestion() const
+{
+    const juce::File src (wavFilePath_);
+    const juce::String prefix = wavState_.prefix.isNotEmpty() ? wavState_.prefix : juce::String ("SAMPLE");
+    const juce::String name = prefix + "_" + juce::String::fromUTF8 (noteName (wavState_.rootKey).c_str()) + ".wav";
+    return (src.getFullPathName().isNotEmpty() ? src.getParentDirectory() : juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)).getChildFile (name);
+}
+
+void ScoutProcessor::readWavStateFrom (const juce::ValueTree& state)
+{
+    WavEditState s = wavState_;
+    s.loopStart = (uint32_t) juce::jmax (0, (int) state.getProperty ("wavLoopStart", (int) s.loopStart));
+    s.loopEnd   = (uint32_t) juce::jmax (0, (int) state.getProperty ("wavLoopEnd", (int) s.loopEnd));
+    s.loopMode  = (int) state.getProperty ("wavLoopMode", s.loopMode);
+    s.rootKey   = (int) state.getProperty ("wavRoot", s.rootKey);
+    s.fineCents = (double) state.getProperty ("wavCents", s.fineCents);
+    s.attackMs  = (double) state.getProperty ("wavAttackMs", s.attackMs);
+    s.releaseMs = (double) state.getProperty ("wavReleaseMs", s.releaseMs);
+    s.focus     = (int) state.getProperty ("focus", s.focus);
+    s.splitNote = (int) state.getProperty ("splitNote", s.splitNote);
+    s.export16BitMono = (bool) state.getProperty ("wavExport16Mono", s.export16BitMono);
+    s.description = state.getProperty ("wavDescription", s.description).toString();
+    s.prefix      = state.getProperty ("wavPrefix", s.prefix).toString();
+    setWavState (s);
+    wavDirty_ = false;
 }
 
 juce::String ScoutProcessor::loadSoundFont (const juce::File& file)
@@ -187,6 +322,20 @@ void ScoutProcessor::getStateInformation (juce::MemoryBlock& destData)
     auto state = apvts_.copyState();
     state.setProperty ("sf2Path", loadedFilePath_, nullptr);
     state.setProperty ("presetIndex", presetIndex_.load(), nullptr);
+    // Slot W: non-param state (append-only tree properties, no APVTS params added)
+    state.setProperty ("wavPath", wavFilePath_, nullptr);
+    state.setProperty ("wavLoopStart", (int) wavState_.loopStart, nullptr);
+    state.setProperty ("wavLoopEnd", (int) wavState_.loopEnd, nullptr);
+    state.setProperty ("wavLoopMode", wavState_.loopMode, nullptr);
+    state.setProperty ("wavRoot", wavState_.rootKey, nullptr);
+    state.setProperty ("wavCents", wavState_.fineCents, nullptr);
+    state.setProperty ("wavAttackMs", wavState_.attackMs, nullptr);
+    state.setProperty ("wavReleaseMs", wavState_.releaseMs, nullptr);
+    state.setProperty ("focus", wavState_.focus, nullptr);
+    state.setProperty ("splitNote", wavState_.splitNote, nullptr);
+    state.setProperty ("wavExport16Mono", wavState_.export16BitMono, nullptr);
+    state.setProperty ("wavDescription", wavState_.description, nullptr);
+    state.setProperty ("wavPrefix", wavState_.prefix, nullptr);
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
 }
@@ -202,10 +351,10 @@ void ScoutProcessor::setStateInformation (const void* data, int sizeInBytes)
     auto state = juce::ValueTree::fromXml (*xml);
     apvts_.replaceState (state);
     const juce::String path = state.getProperty ("sf2Path", "").toString();
-    if (path.isEmpty()) return;
-
     pendingRestorePath_ = path;
     pendingRestorePreset_ = (int) state.getProperty ("presetIndex", 0);
+    pendingRestoreWavPath_ = state.getProperty ("wavPath", "").toString();
+    pendingRestoreTree_ = state.createCopy();
     if (juce::MessageManager::getInstance()->isThisTheMessageThread())
         performPendingRestore();
     else
@@ -222,10 +371,15 @@ void ScoutProcessor::performPendingRestore()
     JUCE_ASSERT_MESSAGE_THREAD
     const juce::String path = pendingRestorePath_;
     const int preset = pendingRestorePreset_;
-    if (path.isEmpty()) return;
     // Reload is best-effort: a missing file leaves the tool empty, not broken.
-    if (loadSoundFont (juce::File (path)).isEmpty())
+    if (path.isNotEmpty() && loadSoundFont (juce::File (path)).isEmpty())
         setPresetIndex (preset);
+    // Slot W: the file first (its smpl seeds the state), then the saved edit on top
+    if (pendingRestoreWavPath_.isNotEmpty())
+        (void) loadWav (juce::File (pendingRestoreWavPath_));
+    if (pendingRestoreTree_.isValid())
+        readWavStateFrom (pendingRestoreTree_);
+    pendingRestoreTree_ = {};
 }
 
 juce::AudioProcessorEditor* ScoutProcessor::createEditor()
