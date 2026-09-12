@@ -2,7 +2,7 @@
 
 Convention: `C:\code-bank\templates\CHANGELOG-convention.md`. Prefix `SC`.
 
-## v0.5.0 — 2026-09-12 — v2 build order 1: tracker modules, SF2 zone → W, export from any source (unreleased, not deployed)
+## v0.5.0 — 2026-09-12 — v2 build order 1: tracker modules, SF2 zone → W, export from any source (deployed 2026-09-12, pluginval 5)
 Host impact: reload instance (no param-list change; two new non-param tree properties `modulePath` / `moduleSample`)
 
 ### Scope

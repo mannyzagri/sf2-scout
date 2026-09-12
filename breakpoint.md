@@ -13,8 +13,9 @@
   zone; both land in Slot W and export through the existing writer.
 - Harness = CMake target `test_engine`, **284 checks** green, `--probe` mode
   verified on real MOD / XM / IT files (`scratch/modules/`, untracked).
-- Release build clean, standalone smoke-launched. **Not deployed, not merged**
-  — 0.2.0 through 0.5.0 all wait on the operator's ear verdict (STATE).
+- Release build clean, standalone smoke-launched. **0.5.0 DEPLOYED** to the
+  share Builds (release.ps1 -Force, pluginval 5 PASS). **Not merged** — 0.2.0
+  through 0.5.0 all wait on the operator's ear verdict (STATE).
 - The share's `sf2-scout-src/` is the 2026-08-30 v0.1.0 snapshot (byte-identical
   to commit dc1ab5a): it is NOT newer than the repo. `validator.json srcExport`
   refreshes it on ship.
