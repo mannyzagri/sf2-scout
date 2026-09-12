@@ -1,5 +1,7 @@
 # LOOP_BENCH_SPEC.md — "Loop Bench" sample loop editor/auditioner (VM Claude task)
 
+> **SUPERSEDED 2026-09-12 by `docs/SCOUT_v2_SPEC.md`** (kept verbatim).
+
 ## Purpose
 
 The user's half of the bank-v4 pipeline: load a hardware-recorded WAV, find/

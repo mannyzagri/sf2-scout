@@ -2,6 +2,20 @@
 
 Convention: `C:\code-bank\templates\CHANGELOG-convention.md`. Prefix `SC`.
 
+## v0.5.0 — 2026-09-12 — v2 build order 1: tracker modules, SF2 zone → W, export from any source (unreleased, not deployed)
+Host impact: reload instance (no param-list change; two new non-param tree properties `modulePath` / `moduleSample`)
+
+### Scope
+- [SC-024] CHANGED: scope canon is now `docs/SCOUT_v2_SPEC.md` (operator directive, received verbatim from the share) — universal vintage sample player / editor / converter. Export is a first-class feature; the "no export / no save" NON-features are retired. SF2 and module files remain read-only containers. `CLAUDE.md` scope layer, `SSOT.md` amendment (UNSIGNED), superseded banners on `docs/DSP.md`, `docs/SF2SCOUT_WAV_EXTENSION.md`, `docs/LOOP_BENCH_SPEC.md`.
+### Engine
+- [SC-025] ADDED: vendored **libopenmpt 0.8.9** soundlib (BSD-3, `third_party/libopenmpt/`, 6 MB of sources, autotools/tests/docs stripped) as static lib `openmpt_soundlib`; no zlib/mpg123/vorbis (MO3 and vorbis-compressed samples report an error, every plain tracker format loads). The public libopenmpt API exposes no sample PCM, so `OpenMPT::CSoundFile` is read directly; `MPT_ASSERT` is routed to a no-op `AssertHandler`.
+- [SC-026] ADDED: JUCE-free `ModuleSource` — parses any libopenmpt format from memory (patterns/plugins skipped), exposes title / format / made-with / song message / instrument names and a per-sample table (name, bits, channels, frames, C-5 rate, loop + ping-pong, IT sustain loop, default volume); `decode(index)` → `WavSample` (8→16-bit, inclusive loop end, sustain loop preferred while held, root 60 / 0 c with the C-5 frequency as the WAV rate, bext provenance). Extension routing via `CSoundFile::IsExtensionSupported`.
+- [SC-027] ADDED: `WavSample::fromPcm16` (the bridge every non-WAV source uses to enter Slot W: synthesises fmt + data chunks so `writeWav` serialises it unchanged) and `SoundFontBank::decodeZone` (zone sample out of the float pool → 16-bit WavSample with the zone's loop, root − coarseTune, fine cents, provenance; a stereo pair exports as two mono halves).
+- [SC-028] ADDED: harness `[mod-load]` (in-memory ProTracker MOD: sample table, loop flags, PAL C-5 rate 8287 Hz, decode → export → reload round-trip, extension routing, junk/truncated/lying-header input) and `[mod-play]` (decoded sample sounds in Slot W at its C-5 rate and loops). 284 checks. The harness is now the CMake target `test_engine` (links `openmpt_soundlib`); `--probe <module> [outDir]` lists a real file's samples and exports them. Probe-verified on real MOD / XM (ping-pong) / IT 2.14 (compressed samples, ping-pong).
+### Processor / GUI
+- [SC-029] ADDED: `loadModule` / `selectModuleSample` / `sendZoneToWav` on the processor (shared `installWav` tail with `loadWav`); a module or an SF2 zone decoded into Slot W has no file path, so SAVE routes to SAVE AS (`wavIsDecoded`), SAVE AS suggests `<container>_<sampleName>_<NOTE>.wav` next to the container. Session state persists `modulePath` + `moduleSample` and restores the module before a plain WAV path.
+- [SC-030] ADDED: LOAD and LOAD WAV browsers and drag-and-drop accept every libopenmpt extension (routed to Slot W); the Slot W title shows `module ▸ NN name ▾` and CLICKING it opens the sample chooser (index, name, bits, frames, loop kind, C-5 Hz); `,` / `.` step through the module's samples; a **→ W** button in the preset-list header sends the readout's zone (last played, else under the last note, else first) to Slot W, asking first if Slot W has unsaved markers. Version 0.5.0.
+
 ## v0.4.0 — 2026-09-04 — KEYBOARD PLAYS control, empty-slot fallback, UNLOAD per slot (unreleased, not deployed)
 Host impact: reload instance (no param-list change)
 
@@ -53,7 +67,7 @@ Host impact: n/a (never loaded in a host yet)
 ### Infra
 - [SC-005] ADDED: scaffold — CLAUDE.md, SSOT.md (unsigned), PROJECT-NOTES STATE, validator.json (dsp/bundle/deploy/host), FEATURE-INDEX.json, comms/, share mailbox.
 
-## ITEM LEDGER (next free: SC-024)
+## ITEM LEDGER (next free: SC-031)
 | id | status | introduced | resolved | summary |
 |----|--------|-----------|----------|---------|
 | SC-001 | shipped | 0.1.0 | — | SF2 loading + zone table |
@@ -79,3 +93,10 @@ Host impact: n/a (never loaded in a host yet)
 | SC-021 | shipped | 0.4.0 | — | engine clearBank/clearWav (UNLOAD path) |
 | SC-022 | shipped | 0.4.0 | — | KEYBOARD PLAYS SF2/WAV/SPLIT control with disabled empty slots |
 | SC-023 | shipped | 0.4.0 | — | UNLOAD buttons per slot, save prompt on dirty WAV |
+| SC-024 | shipped | 0.5.0 | — | v2 scope canon (SCOUT_v2_SPEC.md), export allowed, containers read-only |
+| SC-025 | shipped | 0.5.0 | — | vendored libopenmpt 0.8.9 soundlib as openmpt_soundlib |
+| SC-026 | shipped | 0.5.0 | — | ModuleSource: module parse + sample decode → WavSample |
+| SC-027 | shipped | 0.5.0 | — | WavSample::fromPcm16 bridge + SoundFontBank::decodeZone |
+| SC-028 | shipped | 0.5.0 | — | harness mod-load / mod-play, CMake test_engine target, --probe |
+| SC-029 | shipped | 0.5.0 | — | processor loadModule / selectModuleSample / sendZoneToWav, state |
+| SC-030 | shipped | 0.5.0 | — | module routing in browsers/drag, sample chooser, , . keys, → W button |

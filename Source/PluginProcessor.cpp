@@ -150,28 +150,104 @@ juce::String ScoutProcessor::loadWav (const juce::File& file)
     if (wav == nullptr)
         return file.getFileName() + ": " + juce::String (err);
 
-    // the file's own metadata seeds the editor state; focus/split/fades/prefix persist across loads
+    // "<PREFIX>_<NOTE>" -> remember the prefix for SAVE AS (only if none is set yet)
+    const juce::String stem = file.getFileNameWithoutExtension();
+    const int us = stem.lastIndexOfChar ('_');
+    const juce::String prefix = (us > 0 && rootFromFileName (file.getFileName().toStdString()) >= 0) ? stem.substring (0, us) : stem;
+    // a plain WAV replaces whatever container fed Slot W before
+    uiModule_.reset();
+    modulePath_.clear();
+    moduleSampleIndex_ = -1;
+    installWav (std::move (wav), file.getFullPathName(), prefix, false);
+    return {};
+}
+
+void ScoutProcessor::installWav (std::unique_ptr<WavSample> wav, const juce::String& filePath, const juce::String& prefix, bool prefixWins)
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    // the sample's own metadata seeds the editor state; focus/split/fades persist across loads
     wavState_.loopStart = wav->loopStart;
     wavState_.loopEnd   = wav->loopEnd;
     wavState_.loopMode  = wav->hasSmpl ? (wav->loopType == 1 ? 1 : 0) : 0;
     wavState_.rootKey   = wav->rootKey;
     wavState_.fineCents = wav->fineCents;
     wavState_.description = juce::String::fromUTF8 (wav->bextDescription.c_str());
-    if (wavState_.prefix.isEmpty())
-    {
-        // "<PREFIX>_<NOTE>" -> remember the prefix for SAVE AS
-        const juce::String stem = file.getFileNameWithoutExtension();
-        const int us = stem.lastIndexOfChar ('_');
-        wavState_.prefix = (us > 0 && rootFromFileName (file.getFileName().toStdString()) >= 0) ? stem.substring (0, us) : stem;
-    }
+    if (prefixWins || wavState_.prefix.isEmpty()) wavState_.prefix = prefix;
     uiWav_ = wav.get();
-    wavFilePath_ = file.getFullPathName();
+    wavFilePath_ = filePath;
     wavDirty_ = false;
     delete engine_.takeRetiredWav();
     pushWavState();
     engine_.setWav (wav.release());
     wavGeneration_.fetch_add (1, std::memory_order_acq_rel);
     normaliseFocus();
+}
+
+// ------------------------------------------------------------------ v2 sources
+namespace
+{
+// SAVE AS naming: "<SOURCE>_<sampleName>_<NOTE>.wav" -- keep it filesystem-safe
+juce::String safeName (juce::String s)
+{
+    s = s.trim();
+    juce::String out;
+    for (auto c : s) out << (juce::CharacterFunctions::isLetterOrDigit (c) || c == '-' || c == '_' ? juce::String::charToString (c) : juce::String ("_"));
+    while (out.contains ("__")) out = out.replace ("__", "_");
+    return out.trimCharactersAtStart ("_").trimCharactersAtEnd ("_");
+}
+}
+
+juce::String ScoutProcessor::loadModule (const juce::File& file)
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    if (! file.existsAsFile())
+        return "file not found: " + file.getFullPathName();
+    juce::MemoryBlock bytes;
+    if (! file.loadFileAsData (bytes))
+        return "could not read " + file.getFileName();
+    std::string err;
+    auto mod = ModuleSource::load (bytes.getData(), bytes.getSize(), file.getFileName().toStdString(), err);
+    if (mod == nullptr)
+        return file.getFileName() + ": " + juce::String::fromUTF8 (err.c_str());
+    const int first = mod->firstNonEmpty();
+    if (first < 0)
+        return file.getFileName() + ": module has no sample data";
+    uiModule_ = std::move (mod);
+    modulePath_ = file.getFullPathName();
+    moduleSampleIndex_ = -1;
+    return selectModuleSample (first);
+}
+
+juce::String ScoutProcessor::selectModuleSample (int index)
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    if (uiModule_ == nullptr) return "no module loaded";
+    std::string err;
+    auto wav = uiModule_->decode (index, err);
+    if (wav == nullptr) return juce::String::fromUTF8 (err.c_str());
+    moduleSampleIndex_ = index;
+    const auto& info = uiModule_->samples()[(size_t) index - 1];
+    const juce::String modStem = safeName (juce::File (modulePath_).getFileNameWithoutExtension());
+    const juce::String smp = info.name.empty() ? juce::String::formatted ("%02d", index) : safeName (juce::String::fromUTF8 (info.name.c_str()));
+    installWav (std::move (wav), {}, modStem + "_" + smp, true);      // no path: the module is never written back
+    return {};
+}
+
+juce::String ScoutProcessor::sendZoneToWav (int presetIndex, int zoneIndex)
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    if (uiBank_ == nullptr) return "no SoundFont loaded";
+    if (presetIndex < 0 || presetIndex >= uiBank_->presetCount()) return "no preset";
+    const auto& zones = uiBank_->presets()[(size_t) presetIndex].zones;
+    if (zoneIndex < 0 || zoneIndex >= (int) zones.size()) return "no zone";
+    const Zone& z = zones[(size_t) zoneIndex];
+    auto wav = uiBank_->decodeZone (z);
+    if (wav == nullptr || wav->frames == 0) return "zone has no sample data";
+    uiModule_.reset();
+    modulePath_.clear();
+    moduleSampleIndex_ = -1;
+    const juce::String sfStem = safeName (juce::File (loadedFilePath_).getFileNameWithoutExtension());
+    installWav (std::move (wav), {}, sfStem + "_" + safeName (juce::String::fromUTF8 (z.sampleName.c_str())), true);
     return {};
 }
 
@@ -247,7 +323,12 @@ juce::File ScoutProcessor::wavSaveAsSuggestion() const
     const juce::File src (wavFilePath_);
     const juce::String prefix = wavState_.prefix.isNotEmpty() ? wavState_.prefix : juce::String ("SAMPLE");
     const juce::String name = prefix + "_" + juce::String::fromUTF8 (noteName (wavState_.rootKey).c_str()) + ".wav";
-    return (src.getFullPathName().isNotEmpty() ? src.getParentDirectory() : juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)).getChildFile (name);
+    // a decoded sample has no file of its own: suggest next to its container
+    juce::File dir = src.getFullPathName().isNotEmpty() ? src.getParentDirectory()
+                   : modulePath_.isNotEmpty()           ? juce::File (modulePath_).getParentDirectory()
+                   : loadedFilePath_.isNotEmpty()       ? juce::File (loadedFilePath_).getParentDirectory()
+                   : juce::File::getSpecialLocation (juce::File::userDocumentsDirectory);
+    return dir.getChildFile (name);
 }
 
 void ScoutProcessor::readWavStateFrom (const juce::ValueTree& state)
@@ -316,6 +397,9 @@ void ScoutProcessor::unloadWav()
     JUCE_ASSERT_MESSAGE_THREAD
     uiWav_ = nullptr;
     wavFilePath_.clear();
+    uiModule_.reset();
+    modulePath_.clear();
+    moduleSampleIndex_ = -1;
     wavDirty_ = false;
     delete engine_.takeRetiredWav();
     engine_.clearWav();
@@ -372,6 +456,8 @@ void ScoutProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("presetIndex", presetIndex_.load(), nullptr);
     // Slot W: non-param state (append-only tree properties, no APVTS params added)
     state.setProperty ("wavPath", wavFilePath_, nullptr);
+    state.setProperty ("modulePath", modulePath_, nullptr);          // v2: module container + chosen sample
+    state.setProperty ("moduleSample", moduleSampleIndex_, nullptr);
     state.setProperty ("wavLoopStart", (int) wavState_.loopStart, nullptr);
     state.setProperty ("wavLoopEnd", (int) wavState_.loopEnd, nullptr);
     state.setProperty ("wavLoopMode", wavState_.loopMode, nullptr);
@@ -403,6 +489,8 @@ void ScoutProcessor::setStateInformation (const void* data, int sizeInBytes)
     pendingRestorePath_ = path;
     pendingRestorePreset_ = (int) state.getProperty ("presetIndex", 0);
     pendingRestoreWavPath_ = state.getProperty ("wavPath", "").toString();
+    pendingRestoreModulePath_ = state.getProperty ("modulePath", "").toString();
+    pendingRestoreModuleSample_ = (int) state.getProperty ("moduleSample", -1);
     pendingRestoreTree_ = state.createCopy();
     if (juce::MessageManager::getInstance()->isThisTheMessageThread())
         performPendingRestore();
@@ -424,7 +512,13 @@ void ScoutProcessor::performPendingRestore()
     if (path.isNotEmpty() && loadSoundFont (juce::File (path)).isEmpty())
         setPresetIndex (preset);
     // Slot W: the file first (its smpl seeds the state), then the saved edit on top
-    if (pendingRestoreWavPath_.isNotEmpty())
+    // (a module container wins over a plain WAV path: its decoded sample IS Slot W)
+    if (pendingRestoreModulePath_.isNotEmpty())
+    {
+        if (loadModule (juce::File (pendingRestoreModulePath_)).isEmpty() && pendingRestoreModuleSample_ >= 1)
+            (void) selectModuleSample (pendingRestoreModuleSample_);
+    }
+    else if (pendingRestoreWavPath_.isNotEmpty())
         (void) loadWav (juce::File (pendingRestoreWavPath_));
     if (pendingRestoreTree_.isValid())
         readWavStateFrom (pendingRestoreTree_);

@@ -16,6 +16,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include "WavSample.h"
 
 struct tsf;
 
@@ -95,6 +96,12 @@ public:
     // The zone the READOUT should describe for a key: first zone of the preset
     // covering key (velocity-agnostic when vel < 0). nullptr if none.
     const Zone* zoneForKey (int presetIndex, int key, int vel = -1) const;
+
+    // v2 export path (docs/SCOUT_v2_SPEC.md): copies one zone's sample out of
+    // the float pool as a 16-bit WavSample carrying the zone's loop (inclusive
+    // end), root/tune and provenance, so it can enter Slot W and the exporter.
+    // The bank itself is never written.
+    std::unique_ptr<WavSample> decodeZone (const Zone& z) const;
 
 private:
     SoundFontBank() = default;

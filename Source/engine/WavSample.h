@@ -54,6 +54,13 @@ struct WavSample
     // Malformed input never throws or crashes. `fileName` (basename) feeds the
     // <PREFIX>_<NOTE>.wav root fallback when no smpl chunk carries a root.
     static std::unique_ptr<WavSample> load (const void* data, size_t size, const std::string& fileName, std::string& error);
+
+    // Builds a WavSample from decoded 16-bit PCM (interleaved when stereo) --
+    // the bridge every non-WAV source (SF2 zone, module sample) uses to enter
+    // the editor and the exporter. Synthesises fmt + data chunks so writeWav
+    // can serialise it; loop/root fields are left at their defaults (whole
+    // file, root 60) for the caller to fill.
+    static std::unique_ptr<WavSample> fromPcm16 (std::vector<int16_t> interleaved, int channels, uint32_t sampleRate, const std::string& fileName);
 };
 
 // What the editor wants written back.

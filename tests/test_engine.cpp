@@ -15,11 +15,16 @@
 //               forward wrap continuity, ping-pong reversal at both markers,
 //               one-shot end, release keeps cycling, focus/split routing,
 //               smpl round-trip (write -> read identical, data byte-identical)
+//   [mod-load]  ModuleSource: MOD parse, sample table, loop flags, C-5 rate, decode ->
+//               WavSample bridge (inclusive loop end, root 60), export round-trip,
+//               extension routing, malformed/truncated input
+//   [mod-play]  a decoded module sample sounds in Slot W at its C-5 rate and loops
 // Compile (validator.json dsp stage):
-//   cl /nologo /EHsc /O2 /std:c++17 tests\test_engine.cpp Source\engine\SoundFontBank.cpp Source\engine\ScoutEngine.cpp Source\engine\WavSample.cpp /Fo:scratch\ /Fe:scratch\test_engine.exe
+//   cmake --build build --config Release --target test_engine   (links openmpt_soundlib)
 #include "../Source/engine/SoundFontBank.h"
 #include "../Source/engine/ScoutEngine.h"
 #include "../Source/engine/WavSample.h"
+#include "../Source/engine/ModuleSource.h"
 #include "../Source/engine/LoopMarkers.h"
 #include "../Source/engine/NoteNames.h"
 
@@ -267,8 +272,54 @@ double estimatePeriod (const std::vector<float>& x, size_t from, size_t to)
 } // namespace
 
 // ----------------------------------------------------------------- tests
-int main()
+// --probe <module> [outDir]: real-file diagnostic (not part of the check run).
+// Lists the module's sample table and, with outDir, exports every non-empty
+// sample as a loop-tagged WAV through the same bridge the plugin uses.
+static int probeModule (const char* path, const char* outDir)
 {
+    FILE* f = std::fopen (path, "rb");
+    if (f == nullptr) { std::printf ("cannot open %s\n", path); return 2; }
+    std::vector<uint8_t> bytes;
+    { uint8_t buf[65536]; size_t n; while ((n = std::fread (buf, 1, sizeof (buf), f)) > 0) bytes.insert (bytes.end(), buf, buf + n); }
+    std::fclose (f);
+    std::string name = path; { const size_t s = name.find_last_of ("/\\"); if (s != std::string::npos) name = name.substr (s + 1); }
+    std::string err;
+    auto mod = ModuleSource::load (bytes.data(), bytes.size(), name, err);
+    if (mod == nullptr) { std::printf ("load failed: %s\n", err.c_str()); return 1; }
+    std::printf ("%s  [%s / %s]  title=\"%s\"  made with: %s\n  %d sample slots, %d with data, %d instruments\n",
+                 name.c_str(), mod->formatName().c_str(), mod->formatType().c_str(), mod->title().c_str(), mod->madeWith().c_str(),
+                 mod->sampleCount(), mod->nonEmptySampleCount(), (int) mod->instrumentNames().size());
+    for (const auto& s : mod->samples())
+    {
+        if (s.isEmpty()) continue;
+        std::printf ("  %02d %-24s %2db %s %8u fr  c5=%6u Hz  loop=%s", s.index, s.name.c_str(), s.bits, s.channels == 2 ? "st" : "mo",
+                     (unsigned) s.frames, (unsigned) s.sampleRate,
+                     s.hasLoop ? (std::to_string (s.loopStart) + "-" + std::to_string (s.loopEnd) + (s.pingPong ? " pp" : " fwd")).c_str() : "none");
+        if (s.hasSustain) std::printf ("  sustain=%u-%u%s", (unsigned) s.sustainStart, (unsigned) s.sustainEnd, s.sustainPingPong ? " pp" : " fwd");
+        std::printf ("\n");
+        if (outDir != nullptr)
+        {
+            std::string derr;
+            auto w = mod->decode (s.index, derr);
+            if (w == nullptr) { std::printf ("     decode failed: %s\n", derr.c_str()); continue; }
+            WavSaveSpec spec; spec.loopStart = w->loopStart; spec.loopEnd = w->loopEnd; spec.loopType = w->loopType; spec.rootKey = w->rootKey; spec.fineCents = w->fineCents;
+            spec.description = w->bextDescription;
+            auto img = writeWav (*w, spec);
+            char fn[512]; std::snprintf (fn, sizeof (fn), "%s/%02d_%s.wav", outDir, s.index, s.name.empty() ? "sample" : s.name.c_str());
+            for (char* c = fn + std::strlen (outDir) + 1; *c; ++c) if (std::strchr ("<>:\"|?*", *c) || (unsigned char) *c < 32) *c = '_';
+            FILE* o = std::fopen (fn, "wb");
+            if (o == nullptr) { std::printf ("     cannot write %s\n", fn); continue; }
+            std::fwrite (img.data(), 1, img.size(), o); std::fclose (o);
+            std::printf ("     -> %s\n", fn);
+        }
+    }
+    return 0;
+}
+
+int main (int argc, char** argv)
+{
+    if (argc >= 3 && std::strcmp (argv[1], "--probe") == 0) return probeModule (argv[2], argc >= 4 ? argv[3] : nullptr);
+
     std::vector<Sample> samples = {
         { "Loop_C4", sine (4000, 100.0), 1000, 3000, 44100, 60 },   // loop [1000,3000), 100-sample period
         { "Shot_C5", ramp (2000),        0,    0,    44100, 72 },   // one-shot
@@ -1151,6 +1202,141 @@ int main()
         CHECK (e.takeRetiredBank() == nullptr && e.requestedBank() == nullptr);
         e.noteOn (60, 100); render (e, 64);
         CHECK (e.activeVoiceCount() == 0);
+    }
+
+    // ------------------------------------------------------------ v2: modules
+    // A structurally complete 4-channel ProTracker MOD built in memory:
+    // sample 1 "loop_c" = 1000 frames of an index ramp with a loop at
+    // [200, 400), sample 2 "shot" = 300 frames, no loop, other slots empty.
+    auto buildMod = [] (bool withLoop) -> std::vector<uint8_t>
+    {
+        std::vector<uint8_t> m;
+        auto u8  = [&] (int v) { m.push_back ((uint8_t) v); };
+        auto be16 = [&] (int v) { u8 ((v >> 8) & 0xff); u8 (v & 0xff); };
+        auto fixed = [&] (const char* s, int n) { const int l = (int) std::strlen (s); for (int i = 0; i < n; ++i) u8 (i < l ? s[i] : 0); };
+        fixed ("scout harness", 20);
+        for (int i = 0; i < 31; ++i)
+        {
+            if (i == 0)      { fixed ("loop_c", 22); be16 (500); u8 (0); u8 (64); be16 (withLoop ? 100 : 0); be16 (withLoop ? 100 : 1); }
+            else if (i == 1) { fixed ("shot", 22);   be16 (150); u8 (0); u8 (48); be16 (0); be16 (1); }
+            else             { fixed ("", 22);       be16 (0);   u8 (0); u8 (0);  be16 (0); be16 (1); }
+        }
+        u8 (1); u8 (127);                                  // song length, restart
+        for (int i = 0; i < 128; ++i) u8 (0);             // orders: pattern 0 only
+        fixed ("M.K.", 4);
+        for (int i = 0; i < 1024; ++i) u8 (0);            // one empty pattern
+        for (int i = 0; i < 1000; ++i) u8 ((int8_t) ((i % 200) - 100));   // sample 1: signed 8-bit ramp
+        for (int i = 0; i < 300; ++i) u8 ((int8_t) (i / 3 - 50));         // sample 2
+        return m;
+    };
+
+    SECTION ("mod-load");
+    {
+        auto img = buildMod (true);
+        std::string merr;
+        auto mod = ModuleSource::load (img.data(), img.size(), "harness.mod", merr);
+        CHECK (mod != nullptr);
+        if (mod != nullptr)
+        {
+            CHECK (mod->title() == "scout harness");
+            CHECK (mod->formatType() == "mod");
+            CHECK (mod->sampleCount() == 31 && mod->nonEmptySampleCount() == 2 && mod->firstNonEmpty() == 1);
+            const auto& s1 = mod->samples()[0];
+            CHECK (s1.index == 1 && s1.name == "loop_c" && s1.frames == 1000 && s1.bits == 8 && s1.channels == 1);
+            CHECK (s1.hasLoop && ! s1.pingPong && s1.loopStart == 200 && s1.loopEnd == 400 && ! s1.hasSustain);
+            CHECK (s1.sampleRate == 8287);                                    // PAL Amiga C-5 at finetune 0
+            const auto& s2 = mod->samples()[1];
+            CHECK (s2.name == "shot" && s2.frames == 300 && ! s2.hasLoop);
+            CHECK (mod->samples()[2].isEmpty());
+            // decode -> WavSample carrying the module's loop, inclusive end, root 60 at the C-5 rate
+            std::string derr;
+            auto w = mod->decode (1, derr);
+            CHECK (w != nullptr);
+            if (w != nullptr)
+            {
+                CHECK (w->frames == 1000 && w->channels == 1 && w->bitsPerSample == 16 && w->sampleRate == 8287);
+                CHECK (w->hasSmpl && w->loopStart == 200 && w->loopEnd == 399 && w->loopType == 0);
+                CHECK (w->rootKey == 60 && w->fineCents == 0.0 && w->rootFromFile);
+                CHECK (std::fabs (w->left[0] * 128.0f - (-100.0f)) < 1e-3f && std::fabs (w->left[150] * 128.0f - 50.0f) < 1e-3f);
+                CHECK (w->chunks.size() == 2);
+                CHECK (w->bextDescription.find ("harness.mod") != std::string::npos && w->bextDescription.find ("loop=200-400") != std::string::npos);
+                // the bridge round-trips through the exporter: smpl written, data byte-identical, reload agrees
+                WavSaveSpec spec; spec.loopStart = w->loopStart; spec.loopEnd = w->loopEnd; spec.loopType = 0; spec.rootKey = 60;
+                auto bytes = writeWav (*w, spec);
+                std::string rerr;
+                auto back = WavSample::load (bytes.data(), bytes.size(), "loop_c.wav", rerr);
+                CHECK (back != nullptr && back->frames == 1000 && back->sampleRate == 8287 && back->hasSmpl
+                       && back->loopStart == 200 && back->loopEnd == 399 && back->rootKey == 60);
+                CHECK (back != nullptr && std::memcmp (back->chunks[1].body.data(), w->chunks[1].body.data(), 2000) == 0);
+            }
+            auto w2 = mod->decode (2, derr);
+            CHECK (w2 != nullptr && ! w2->hasSmpl && w2->loopStart == 0 && w2->loopEnd == 299);
+            CHECK (mod->decode (3, derr) == nullptr && ! derr.empty());     // empty slot
+            CHECK (mod->decode (0, derr) == nullptr && mod->decode (99, derr) == nullptr);
+        }
+        // a MOD whose sample 1 has no loop -> whole-file default markers, hasSmpl false
+        auto img2 = buildMod (false);
+        auto mod2 = ModuleSource::load (img2.data(), img2.size(), "noloop.mod", merr);
+        CHECK (mod2 != nullptr && ! mod2->samples()[0].hasLoop);
+        std::string d2;
+        auto w3 = mod2 != nullptr ? mod2->decode (1, d2) : nullptr;
+        CHECK (w3 != nullptr && ! w3->hasSmpl && w3->loopEnd == 999);
+        // extension routing
+        CHECK (ModuleSource::isSupportedExtension ("mod") && ModuleSource::isSupportedExtension (".XM")
+               && ModuleSource::isSupportedExtension ("it") && ModuleSource::isSupportedExtension ("s3m")
+               && ! ModuleSource::isSupportedExtension ("wav") && ! ModuleSource::isSupportedExtension ("sf2")
+               && ! ModuleSource::isSupportedExtension (""));
+        CHECK (ModuleSource::supportedExtensions().size() > 20);
+        // malformed input: error string, never a crash
+        CHECK (ModuleSource::load (nullptr, 0, "x", merr) == nullptr && ! merr.empty());
+        const char junk[] = "this is not a module at all, just some bytes of text that go nowhere";
+        CHECK (ModuleSource::load (junk, sizeof (junk), "x.mod", merr) == nullptr && ! merr.empty());
+        for (int k = 1; k < 16; ++k)
+        {
+            const size_t cut = img.size() * (size_t) k / 16;
+            std::string te;
+            auto t = ModuleSource::load (img.data(), cut, "cut.mod", te);
+            if (t != nullptr) { std::string de; (void) t->decode (1, de); (void) t->decode (2, de); }
+        }
+        CHECK (true);
+        std::vector<uint8_t> lie = img; lie[42] = 0xff; lie[43] = 0xff;     // sample 1 claims 65535 words
+        { std::string le; auto t = ModuleSource::load (lie.data(), lie.size(), "lie.mod", le); if (t != nullptr) { std::string de; (void) t->decode (1, de); } }
+        CHECK (true);
+    }
+
+    SECTION ("mod-play");
+    {
+        // a decoded module sample plays in Slot W at its C-5 rate on note 60
+        auto img = buildMod (true);
+        std::string merr;
+        auto mod = ModuleSource::load (img.data(), img.size(), "harness.mod", merr);
+        std::string derr;
+        auto w = mod != nullptr ? mod->decode (1, derr) : nullptr;
+        CHECK (w != nullptr);
+        if (w != nullptr)
+        {
+            ScoutEngine e; e.prepare (44100.0);
+            e.setWavLoop (w->loopStart, w->loopEnd, WavLoopMode::Forward);
+            e.setWavTuning (60, 0.0);
+            e.setWavFades (0.0, 80.0);
+            e.setFocus (Focus::W, 60);
+            e.setWav (w.release());
+            render (e, 64); e.reset();
+            e.noteOn (60, 100);
+            render (e, 1000);                                                 // ~22 ms, still before loopStart
+            const double expect = 1000.0 * 8287.0 / 44100.0;                  // ~188 frames in
+            CHECK (e.activeVoiceCount() == 1);
+            CHECK (std::fabs (e.lastWavPlayhead() - expect) < 2.0);
+            // keep holding: the loop [200,399] sustains
+            auto out = render (e, 44100);
+            CHECK (e.activeVoiceCount() == 1 && e.lastWavPlayhead() >= 200.0 && e.lastWavPlayhead() <= 400.0);
+            float peak = 0.0f; for (float v : out) peak = std::max (peak, std::fabs (v));
+            CHECK (peak > 0.05f);
+            e.noteOff (60); render (e, 8820);
+            CHECK (e.activeVoiceCount() == 0);
+            delete e.takeRetiredWav();
+            e.clearWav(); render (e, 64); delete e.takeRetiredWav();
+        }
     }
 
     std::printf ("%d checks, %d failures\n", g_checks, g_failed);

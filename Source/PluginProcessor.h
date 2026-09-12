@@ -4,6 +4,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "engine/ScoutEngine.h"
 #include "engine/WavSample.h"
+#include "engine/ModuleSource.h"
 
 namespace sf2scout
 {
@@ -113,6 +114,19 @@ public:
     bool hasSf2() const { return uiBank_ != nullptr; }
     bool hasWav() const { return uiWav_ != nullptr; }
 
+    // ---- v2 sources (docs/SCOUT_v2_SPEC.md). A tracker module is a read-only
+    // CONTAINER: loading one decodes a chosen sample into Slot W (so it plays,
+    // edits and exports like any WAV). An SF2 zone can be sent to Slot W the
+    // same way. Neither container is ever written; Slot W's SAVE routes to
+    // SAVE AS while it holds a decoded sample (no file to write back into).
+    juce::String loadModule (const juce::File& file);     // "" on success; previous state kept on failure
+    juce::String selectModuleSample (int index);          // 1-based; decodes into Slot W
+    const ModuleSource* module() const { return uiModule_.get(); }
+    juce::String modulePath() const { return modulePath_; }
+    int moduleSampleIndex() const { return moduleSampleIndex_; }
+    juce::String sendZoneToWav (int presetIndex, int zoneIndex);   // SF2 zone -> Slot W
+    bool wavIsDecoded() const { return uiWav_ != nullptr && wavFilePath_.isEmpty(); }
+
     static constexpr const char* kBuildStamp = SF2SCOUT_VERSION_STRING " " __DATE__ " " __TIME__;
 
 private:
@@ -145,6 +159,13 @@ private:
     void pushWavState();
     void normaliseFocus();                // focus on an empty slot -> the loaded one (mirrors the engine fallback)
     void readWavStateFrom (const juce::ValueTree& state);
+    // shared tail of loadWav / selectModuleSample / sendZoneToWav
+    void installWav (std::unique_ptr<WavSample> wav, const juce::String& filePath, const juce::String& prefix, bool prefixWins);
+    std::unique_ptr<ModuleSource> uiModule_;
+    juce::String modulePath_;
+    int moduleSampleIndex_ = -1;
+    juce::String pendingRestoreModulePath_;
+    int pendingRestoreModuleSample_ = -1;
 
     // F2: setStateInformation may run on any host thread; the actual load is
     // deferred to the message thread (AsyncUpdater cancels any pending update

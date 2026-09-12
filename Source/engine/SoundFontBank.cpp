@@ -5,6 +5,7 @@
 #include "../../third_party/tsf/tsf.h"
 
 #include <cstring>
+#include <cmath>
 #include <algorithm>
 
 namespace sf2scout
@@ -262,6 +263,43 @@ const Zone* SoundFontBank::zoneForKey (int presetIndex, int key, int vel) const
         if (z.coversKey (key) && (vel < 0 || z.coversVel (vel)))
             return &z;
     return nullptr;
+}
+
+} // namespace sf2scout
+
+namespace sf2scout
+{
+
+std::unique_ptr<WavSample> SoundFontBank::decodeZone (const Zone& z) const
+{
+    const uint32_t start = std::min (z.sampleStart, sampleCount_);
+    const uint32_t end   = std::min (std::max (z.sampleEnd, start), sampleCount_);
+    const uint32_t n     = end - start;
+    std::vector<int16_t> pcm (n);
+    for (uint32_t i = 0; i < n; ++i)
+    {
+        const float v = std::max (-1.0f, std::min (1.0f, samples_[start + i]));
+        pcm[i] = (int16_t) std::lround (v * 32767.0f);
+    }
+    std::string name = z.sampleName.empty() ? ("sample" + std::to_string (z.sampleIndex)) : z.sampleName;
+    auto w = WavSample::fromPcm16 (std::move (pcm), 1, z.sampleRate, name + ".wav");
+    if (z.hasLoop() && z.loopStart >= start && z.loopEnd <= end)
+    {
+        w->hasSmpl   = true;
+        w->loopStart = z.loopStart - start;
+        w->loopEnd   = z.loopEnd - start - 1;           // SF2 exclusive -> inclusive
+        w->loopType  = 0;
+    }
+    // the WAV plays note n at 2^((n-root)/12 + cents/1200); SF2 adds coarseTune on top of the root
+    w->rootKey   = std::max (0, std::min (127, z.rootKey - z.transpose));
+    w->fineCents = z.tuneCents;
+    w->rootFromFile = true;
+    w->bextDescription = "sf2=" + fileName_ + " sample=" + std::to_string (z.sampleIndex) + " \"" + name + "\""
+                       + " keys=" + std::to_string (z.lokey) + "-" + std::to_string (z.hikey)
+                       + " root=" + std::to_string (z.rootKey) + " rate=" + std::to_string (z.sampleRate)
+                       + (z.hasLoop() ? " loop=" + std::to_string (z.loopStartRel()) + "-" + std::to_string (z.loopEndRel()) + (z.loopMode == LoopMode::Sustain ? " sustain" : " fwd") : std::string (" loop=none"))
+                       + (z.isStereoHalf() ? (z.sampleType == 4 ? " stereo=L" : " stereo=R") : std::string());
+    return w;
 }
 
 } // namespace sf2scout

@@ -295,3 +295,47 @@ std::vector<uint8_t> writeWav (const WavSample& w, const WavSaveSpec& spec)
 }
 
 } // namespace sf2scout
+
+namespace sf2scout
+{
+
+std::unique_ptr<WavSample> WavSample::fromPcm16 (std::vector<int16_t> interleaved, int channels, uint32_t sampleRate, const std::string& fileName)
+{
+    auto w = std::make_unique<WavSample>();
+    channels = channels == 2 ? 2 : 1;
+    w->fileName      = fileName;
+    w->channels      = channels;
+    w->sampleRate    = sampleRate > 0 ? sampleRate : 8363;
+    w->bitsPerSample = 16;
+    w->formatTag     = 1;
+    w->frames        = (uint32_t) (interleaved.size() / (size_t) channels);
+    w->left.resize (w->frames);
+    if (channels == 2) w->right.resize (w->frames);
+    for (uint32_t i = 0; i < w->frames; ++i)
+    {
+        w->left[i] = (float) interleaved[(size_t) i * channels] / 32768.0f;
+        if (channels == 2) w->right[i] = (float) interleaved[(size_t) i * channels + 1] / 32768.0f;
+    }
+    // synthesise the fmt + data chunks so writeWav's byte-copy path works unchanged
+    Chunk fmt; std::memcpy (fmt.id, "fmt ", 4);
+    {
+        Writer f;
+        f.u16 (1); f.u16 ((uint16_t) channels); f.u32 (w->sampleRate); f.u32 (w->sampleRate * 2u * (uint32_t) channels);
+        f.u16 ((uint16_t) (2 * channels)); f.u16 (16);
+        fmt.body = std::move (f.b);
+    }
+    Chunk data; std::memcpy (data.id, "data", 4);
+    data.body.resize (interleaved.size() * 2);
+    for (size_t i = 0; i < interleaved.size(); ++i)
+    {
+        data.body[i * 2]     = (uint8_t) ((uint16_t) interleaved[i] & 0xff);
+        data.body[i * 2 + 1] = (uint8_t) ((uint16_t) interleaved[i] >> 8);
+    }
+    w->chunks.push_back (std::move (fmt));
+    w->chunks.push_back (std::move (data));
+    w->loopStart = 0;
+    w->loopEnd   = w->frames > 0 ? w->frames - 1 : 0;
+    return w;
+}
+
+} // namespace sf2scout

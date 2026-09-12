@@ -1,5 +1,5 @@
 {
-  "_readme": "Canonical validator config for sf2-scout (repo root wins over code-bank/validator/configs exports). No `gui` stage: the face is plain JUCE, not WebView (CLAUDE.md D-1) -- the headless-Chrome checks do not apply and are omitted rather than faked. `handoff` points at the DERIVED manifest vm-claude wrote from the v1 bundle; gui-claude has been asked for a native one.",
+  "_readme": "Canonical validator config for sf2-scout (repo root wins over code-bank/validator/configs exports). v2 (0.5.0): the harness is a CMake target (test_engine) because it links the vendored libopenmpt soundlib -- still JUCE-free. No `gui` stage: the face is plain JUCE, not WebView (CLAUDE.md D-1) -- the headless-Chrome checks do not apply and are omitted rather than faked. `handoff` points at the DERIVED manifest vm-claude wrote from the v1 bundle; gui-claude has been asked for a native one.",
   "schema": 1,
   "project": "sf2-scout",
   "srcExport": "C:\\vagrant\\Projects\\sf2-scout\\sf2-scout-src",
@@ -15,12 +15,12 @@
     "harnesses": [
       {
         "name": "test_engine",
-        "compile": "cl /nologo /EHsc /O2 /std:c++17 /W3 tests\\test_engine.cpp Source\\engine\\SoundFontBank.cpp Source\\engine\\ScoutEngine.cpp Source\\engine\\WavSample.cpp /Fo:scratch\\ /Fe:scratch\\test_engine.exe",
-        "run": "scratch\\test_engine.exe",
+        "compile": "cmake --build build --config Release --target test_engine --parallel",
+        "run": "build\\Release\\test_engine.exe",
         "expect": [
           "ALL CHECKS PASSED",
           "0 failures",
-          "249 checks, 0 failures",
+          "284 checks, 0 failures",
           "[load]",
           "[authored]",
           "[looponly]",
@@ -43,7 +43,9 @@
           "[wav-smpl]",
           "[markers]",
           "[focus-fallback]",
-          "[unload]"
+          "[unload]",
+          "[mod-load]",
+          "[mod-play]"
         ]
       }
     ]

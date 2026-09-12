@@ -240,5 +240,68 @@
       "ScoutProcessor::normaliseFocus",
       "ScoutEngine::routesToWav"
     ]
+  },
+  "tracker module parsing (libopenmpt soundlib wrapper): sample table, metadata, extension routing": {
+    "file": "Source/engine/ModuleSource.cpp",
+    "symbols": [
+      "ModuleSource::load",
+      "ModuleSource::isSupportedExtension",
+      "ModuleSource::supportedExtensions",
+      "OpenMPT::AssertHandler"
+    ]
+  },
+  "module sample -> WavSample decode (8/16-bit, loop or sustain loop, C-5 rate tuning, provenance)": {
+    "file": "Source/engine/ModuleSource.cpp",
+    "symbols": [
+      "ModuleSource::decode"
+    ]
+  },
+  "PCM -> WavSample bridge (fmt+data synthesis for the exporter)": {
+    "file": "Source/engine/WavSample.cpp",
+    "symbols": [
+      "WavSample::fromPcm16"
+    ]
+  },
+  "SF2 zone -> WavSample decode (export path)": {
+    "file": "Source/engine/SoundFontBank.cpp",
+    "symbols": [
+      "SoundFontBank::decodeZone"
+    ]
+  },
+  "module / zone into Slot W (processor): load, select sample, send zone, shared install, state": {
+    "file": "Source/PluginProcessor.cpp",
+    "symbols": [
+      "ScoutProcessor::loadModule",
+      "ScoutProcessor::selectModuleSample",
+      "ScoutProcessor::sendZoneToWav",
+      "ScoutProcessor::installWav",
+      "ScoutProcessor::wavIsDecoded"
+    ]
+  },
+  "module UI: extension routing, sample chooser popup, , . stepping, -> W button": {
+    "file": "Source/PluginEditor.cpp",
+    "symbols": [
+      "ScoutEditor::isModuleName",
+      "ScoutEditor::loadModuleFile",
+      "ScoutEditor::showSamplePopup",
+      "ScoutEditor::stepModuleSample",
+      "ScoutEditor::sendZoneToWav",
+      "ScoutEditor::mouseDown"
+    ]
+  },
+  "harness: MOD builder, mod-load / mod-play sections, --probe real-file diagnostic": {
+    "file": "tests/test_engine.cpp",
+    "symbols": [
+      "buildMod",
+      "probeModule"
+    ]
+  },
+  "vendored libopenmpt static lib (CMake)": {
+    "file": "CMakeLists.txt",
+    "symbols": [
+      "openmpt_soundlib",
+      "SCOUT_ENGINE_SOURCES",
+      "test_engine"
+    ]
   }
 }

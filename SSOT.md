@@ -23,7 +23,8 @@ what this project owns.
 | Fact domain | Canonical file | Subordinates may |
 |---|---|---|
 | Project scope, era declaration, GUI type, naming contract, exemptions/deviations | `CLAUDE.md` | point only |
-| Behaviour: play modes, release, what is ignored from the SF2 spec, NON-features, acceptance tests, build order | `docs/DSP.md` (the kickoff spec, imported verbatim) | point only |
+| Behaviour: sources, playback, editor, export, acceptance tests, build order | `docs/SCOUT_v2_SPEC.md` (received verbatim 2026-09-12; supersedes `docs/DSP.md`, `docs/SF2SCOUT_WAV_EXTENSION.md`, `docs/LOOP_BENCH_SPEC.md`) — **PROPOSED, unsigned: see amendment log** | point only |
+| SF2-side detail v2 does not restate (play modes, what is ignored from the SF2 spec) | `docs/DSP.md` (the kickoff spec, imported verbatim) | point only |
 | Appearance: layout, tokens, typography, interactions, state model of the face | `docs/handoff-gui-v1/README.md` | point only |
 | Machine-checked face contract (canvas, controls, actions) | `docs/handoff-gui-v1/handoff-manifest.json` (provenance `derived`) | point only |
 | Parameter IDs and encodings | `Source/PluginProcessor.h` (`ParamId`) | restate freely |
@@ -40,3 +41,11 @@ Any role may propose; only the human enacts. Unsigned change = defect.
     Ratified-by: Menashe Zagri
     Date: 2026-08-30
     Change: manifest created for sf2-scout (drafted by vm-claude at kickoff).
+
+    Proposed-by: vm-claude
+    Date: 2026-09-12
+    Change: behaviour canon moves from docs/DSP.md to docs/SCOUT_v2_SPEC.md (the
+            operator's v2 directive, received verbatim from the share); export
+            becomes a feature, containers stay read-only. DSP.md remains canon
+            only for SF2-side detail v2 does not restate.
+    Ratified-by: ____________   (UNSIGNED — operator to sign)

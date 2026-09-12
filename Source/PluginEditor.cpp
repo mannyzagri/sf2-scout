@@ -34,6 +34,9 @@ ScoutEditor::ScoutEditor (ScoutProcessor& p)
     addAndMakeVisible (unloadSf2Button_);
     unloadSf2Button_.setTooltip ("Unload the SoundFont: its voices stop, list and readout clear");
     unloadSf2Button_.onClick = [this] { unloadSf2(); };
+    addAndMakeVisible (toWavButton_);
+    toWavButton_.setTooltip ("Send the zone shown in the readout to Slot W (decoded copy: edit loops, export as WAV). The SF2 is never written.");
+    toWavButton_.onClick = [this] { sendZoneToWav(); };
     addAndMakeVisible (unloadWavButton_);
     unloadWavButton_.setTooltip ("Unload the WAV: its voices stop, waveform clears (asks first if markers are unsaved)");
     unloadWavButton_.onClick = [this] { unloadWav (true); };
@@ -181,6 +184,8 @@ void ScoutEditor::resized()
     prevButton_.setBounds (listHeader.removeFromRight (24).withHeight (22));
     listHeader.removeFromRight (10);
     unloadSf2Button_.setBounds (listHeader.removeFromRight (58).withHeight (22));
+    listHeader.removeFromRight (6);
+    toWavButton_.setBounds (listHeader.removeFromRight (40).withHeight (22));
     presetList_.setBounds (presetCol);
     readout_.setBounds (body);
 
@@ -396,7 +401,9 @@ void ScoutEditor::stepPreset (int delta)
 // ------------------------------------------------------------------ loading
 void ScoutEditor::chooseFile()
 {
-    chooser_ = std::make_unique<juce::FileChooser> ("Load a SoundFont", juce::File(), "*.sf2;*.SF2");
+    juce::String filter = "*.sf2;*.SF2";
+    for (const auto& e : ModuleSource::supportedExtensions()) filter << ";*." << juce::String (e);
+    chooser_ = std::make_unique<juce::FileChooser> ("Load a SoundFont or tracker module", juce::File(), filter);
     chooser_->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
         [this] (const juce::FileChooser& fc)
         {
@@ -407,25 +414,30 @@ void ScoutEditor::chooseFile()
 
 bool ScoutEditor::isInterestedInFileDrag (const juce::StringArray& files)
 {
-    for (auto& f : files) if (f.endsWithIgnoreCase (".sf2") || f.endsWithIgnoreCase (".wav")) return true;
+    for (auto& f : files) if (f.endsWithIgnoreCase (".sf2") || f.endsWithIgnoreCase (".wav") || isModuleName (f)) return true;
     return false;
 }
 
 void ScoutEditor::filesDropped (const juce::StringArray& files, int, int)
 {
-    // route by extension: .sf2 -> Slot R, .wav -> Slot W (first of each)
+    // route by extension: .sf2 -> Slot R, .wav / tracker module -> Slot W (first of each)
     bool gotSf2 = false, gotWav = false;
     for (auto& f : files)
     {
         if (! gotSf2 && f.endsWithIgnoreCase (".sf2")) { loadFile (juce::File (f)); gotSf2 = true; }
         else if (! gotWav && f.endsWithIgnoreCase (".wav")) { loadWavFile (juce::File (f)); gotWav = true; }
+        else if (! gotWav && isModuleName (f)) { loadModuleFile (juce::File (f)); gotWav = true; }
     }
 }
 
 // ------------------------------------------------------------------ Slot W
 void ScoutEditor::chooseWav()
 {
-    chooser_ = std::make_unique<juce::FileChooser> ("Load a WAV into Slot W", juce::File (proc_.wavFilePath()).getParentDirectory(), "*.wav;*.WAV");
+    juce::String filter = "*.wav;*.WAV";
+    for (const auto& e : ModuleSource::supportedExtensions()) filter << ";*." << juce::String (e);
+    const juce::File start = proc_.wavFilePath().isNotEmpty() ? juce::File (proc_.wavFilePath()).getParentDirectory()
+                           : proc_.modulePath().isNotEmpty() ? juce::File (proc_.modulePath()).getParentDirectory() : juce::File();
+    chooser_ = std::make_unique<juce::FileChooser> ("Load a WAV or tracker module into Slot W", start, filter);
     chooser_->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
         [this] (const juce::FileChooser& fc)
         {
@@ -436,6 +448,7 @@ void ScoutEditor::chooseWav()
 
 void ScoutEditor::loadWavFile (const juce::File& f)
 {
+    if (isModuleName (f.getFullPathName())) { loadModuleFile (f); return; }
     const juce::String err = proc_.loadWav (f);
     if (err.isNotEmpty()) { setWavStatus ("ERROR: " + err, true); return; }
     setWavStatus ({}, false);
@@ -467,7 +480,17 @@ void ScoutEditor::rebuildForWav()
         const bool st = w->isStereo();
         for (uint32_t i = 0; i < w->frames; ++i) (*buf)[i] = st ? 0.5f * (L[i] + R[i]) : L[i];
         display_ = buf;
-        wavLabel_ = juce::File (proc_.wavFilePath()).getFileName();
+        if (const ModuleSource* m = proc_.module())
+        {
+            const int idx = proc_.moduleSampleIndex();
+            const juce::String nm = idx >= 1 ? juce::String::fromUTF8 (m->samples()[(size_t) idx - 1].name.c_str()) : juce::String();
+            wavLabel_ = juce::String::fromUTF8 (m->fileName().c_str()) + juce::String::fromUTF8 (" \xE2\x96\xB8 ") + juce::String::formatted ("%02d ", idx) + nm
+                      + juce::String::fromUTF8 ("  \xE2\x96\xBE");
+        }
+        else if (proc_.wavIsDecoded())
+            wavLabel_ = proc_.loadedFileName() + juce::String::fromUTF8 (" \xE2\x96\xB8 ") + juce::String::fromUTF8 (w->fileName.c_str());
+        else
+            wavLabel_ = juce::File (proc_.wavFilePath()).getFileName();
     }
     else
     {
@@ -572,6 +595,11 @@ bool ScoutEditor::keyPressed (const juce::KeyPress& k)
 {
     if (k == juce::KeyPress ('s', juce::ModifierKeys::commandModifier, 0)) { doSave(); return true; }
     if (k == juce::KeyPress ('s', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier, 0)) { doSaveAs(); return true; }
+    if (proc_.module() != nullptr)
+    {
+        if (k.getTextCharacter() == ',') { stepModuleSample (-1); return true; }
+        if (k.getTextCharacter() == '.') { stepModuleSample (+1); return true; }
+    }
     if (proc_.wav() == nullptr) return false;
     switch (k.getTextCharacter())
     {
@@ -596,6 +624,8 @@ void ScoutEditor::doSave()
     if (proc_.wav() == nullptr) { setWavStatus ("no WAV loaded", true); return; }
     // the export checkbox never silently degrades the source: it routes SAVE to SAVE AS
     if (proc_.wavState().export16BitMono) { doSaveAs(); return; }
+    // a decoded module sample / SF2 zone has no file to write back into: SAVE AS
+    if (proc_.wavIsDecoded()) { doSaveAs(); return; }
     const juce::File target (proc_.wavFilePath());
     const juce::String err = proc_.saveWav (target);
     if (err.isNotEmpty()) setWavStatus ("ERROR: " + err, true);
@@ -620,6 +650,7 @@ void ScoutEditor::doSaveAs()
 
 void ScoutEditor::loadFile (const juce::File& f)
 {
+    if (isModuleName (f.getFullPathName())) { loadModuleFile (f); return; }
     const juce::String err = proc_.loadSoundFont (f);
     if (err.isNotEmpty()) { showError (err); return; }
     errorText_.clear();
@@ -652,6 +683,8 @@ void ScoutEditor::rebuildForBank()
     else presetList_.deselectAllRows();
     unloadSf2Button_.setEnabled (b != nullptr);
     unloadSf2Button_.setAlpha (b != nullptr ? 1.0f : 0.4f);
+    toWavButton_.setEnabled (b != nullptr);
+    toWavButton_.setAlpha (b != nullptr ? 1.0f : 0.4f);
     updateFocusEnables();
     shownNote_ = -1;
     seenNoteSeq_ = proc_.engine().lastNote().sequence;
@@ -762,6 +795,123 @@ void ScoutEditor::timerCallback()
     refreshReadout (false);
     const int v = proc_.engine().activeVoiceCount();
     if (v != shownVoices_) { shownVoices_ = v; repaint (getLocalBounds().removeFromBottom (kFooterH)); }
+}
+
+} // namespace sf2scout
+
+// ------------------------------------------------------------------ v2 sources
+namespace sf2scout
+{
+
+bool ScoutEditor::isModuleName (const juce::String& path)
+{
+    const juce::String ext = juce::File (path).getFileExtension();
+    return ext.isNotEmpty() && ModuleSource::isSupportedExtension (ext.toStdString());
+}
+
+void ScoutEditor::loadModuleFile (const juce::File& f)
+{
+    const juce::String err = proc_.loadModule (f);
+    if (err.isNotEmpty()) { setWavStatus ("ERROR: " + err, true); return; }
+    const ModuleSource* m = proc_.module();
+    juce::String info = juce::String::fromUTF8 (m->formatName().c_str());
+    if (! m->title().empty()) info << "  \"" << juce::String::fromUTF8 (m->title().c_str()) << "\"";
+    info << "  " << m->nonEmptySampleCount() << " samples  (click the name or , . to choose)";
+    setWavStatus (info, false);
+    rebuildForWav();
+    grabKeyboardFocus();
+}
+
+juce::Rectangle<int> ScoutEditor::wavLabelBounds() const
+{
+    // the right-hand part of the Slot W title row (where wavLabel_ is painted)
+    auto wc = wavBandBounds().reduced (16, 0);
+    wc.removeFromTop (10);
+    auto wl = wc.removeFromTop (12);
+    wl.removeFromLeft (220);
+    return wl.expanded (0, 3);
+}
+
+void ScoutEditor::mouseDown (const juce::MouseEvent& e)
+{
+    if (proc_.module() != nullptr && wavLabelBounds().contains (e.getPosition())) { showSamplePopup(); return; }
+    juce::AudioProcessorEditor::mouseDown (e);
+}
+
+void ScoutEditor::showSamplePopup()
+{
+    const ModuleSource* m = proc_.module();
+    if (m == nullptr) return;
+    juce::PopupMenu menu;
+    const int cur = proc_.moduleSampleIndex();
+    for (const auto& s : m->samples())
+    {
+        if (s.isEmpty()) continue;
+        juce::String row = juce::String::formatted ("%02d  ", s.index) + juce::String::fromUTF8 (s.name.c_str()).paddedRight (' ', 24)
+                         + juce::String (s.bits) + "b" + (s.channels == 2 ? " st" : "   ")
+                         + juce::String::formatted ("  %8u", (unsigned) s.frames)
+                         + (s.hasSustain ? (s.sustainPingPong ? "  sus-pp" : "  sus") : s.hasLoop ? (s.pingPong ? "  pp" : "  loop") : "")
+                         + "  " + juce::String ((int) s.sampleRate) + "Hz";
+        menu.addItem (s.index, row, true, s.index == cur);
+    }
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (wavLabelBounds())).withMinimumWidth (420),
+        [this] (int result)
+        {
+            if (result <= 0) return;
+            const juce::String err = proc_.selectModuleSample (result);
+            if (err.isNotEmpty()) { setWavStatus ("ERROR: " + err, true); return; }
+            setWavStatus ({}, false);
+            rebuildForWav();
+            grabKeyboardFocus();
+        });
+}
+
+void ScoutEditor::stepModuleSample (int delta)
+{
+    const ModuleSource* m = proc_.module();
+    if (m == nullptr) return;
+    std::vector<int> order;
+    for (const auto& s : m->samples()) if (! s.isEmpty()) order.push_back (s.index);
+    if (order.empty()) return;
+    int pos = 0;
+    for (size_t i = 0; i < order.size(); ++i) if (order[i] == proc_.moduleSampleIndex()) pos = (int) i;
+    const int n = (int) order.size();
+    const int next = ((pos + delta) % n + n) % n;
+    const juce::String err = proc_.selectModuleSample (order[(size_t) next]);
+    if (err.isNotEmpty()) { setWavStatus ("ERROR: " + err, true); return; }
+    setWavStatus ({}, false);
+    rebuildForWav();
+}
+
+void ScoutEditor::sendZoneToWav()
+{
+    const SoundFontBank* b = proc_.bank();
+    if (b == nullptr) { showError ("no SoundFont loaded"); return; }
+    const int pi = proc_.presetIndex();
+    if (pi < 0 || pi >= b->presetCount()) return;
+    const auto& zones = b->presets()[(size_t) pi].zones;
+    if (zones.empty()) { showError ("preset has no zones"); return; }
+    // the zone the readout describes: last played zone of this preset, else the zone under the last note, else the first
+    int zi = -1;
+    const LastNoteInfo info = proc_.engine().lastNote();
+    if (info.presetIndex == pi && info.zoneIndex >= 0 && info.zoneIndex < (int) zones.size()) zi = info.zoneIndex;
+    if (zi < 0 && shownNote_ >= 0)
+        for (size_t i = 0; i < zones.size(); ++i) if (zones[i].coversKey (shownNote_)) { zi = (int) i; break; }
+    if (zi < 0) zi = 0;
+    if (proc_.wavDirty())
+    {
+        auto opts = juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::QuestionIcon)
+                        .withTitle ("Unsaved loop markers")
+                        .withMessage ("Slot W has marker edits that are not saved. Replace it with the SF2 zone?")
+                        .withButton ("Replace").withButton ("Cancel").withAssociatedComponent (this);
+        juce::AlertWindow::showAsync (opts, [this, pi, zi] (int r) { if (r == 1) { proc_.setWavState (proc_.wavState()); const auto e = proc_.sendZoneToWav (pi, zi); if (e.isNotEmpty()) setWavStatus ("ERROR: " + e, true); else { setWavStatus ({}, false); rebuildForWav(); } } });
+        return;
+    }
+    const juce::String err = proc_.sendZoneToWav (pi, zi);
+    if (err.isNotEmpty()) { setWavStatus ("ERROR: " + err, true); return; }
+    setWavStatus ("zone " + juce::String (zi + 1) + " of preset " + juce::String (pi + 1) + " decoded into Slot W (SAVE AS to export)", false);
+    rebuildForWav();
+    grabKeyboardFocus();
 }
 
 } // namespace sf2scout

@@ -1,5 +1,8 @@
 # SF2SCOUT_WAV_EXTENSION.md — extend SF2 Scout with WAV loop editing (VM Claude)
 
+> **SUPERSEDED 2026-09-12 by `docs/SCOUT_v2_SPEC.md`** (kept verbatim; Slot W
+> is now the editor/export slot for EVERY source, not only user WAVs).
+
 ## Summary
 
 SF2 Scout grows a second capability: alongside auditioning SF2 files, it

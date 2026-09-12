@@ -47,16 +47,39 @@ merge --no-ff → push; explicit `git add` lists, never `git add -A`.
 
 <!-- ====================== project-specific below ======================== -->
 
-# SF2 Scout — SoundFont audition / reference tool (VST3 + Standalone)
+# SF2 Scout — vintage sample player / editor / converter (VST3 + Standalone)
 
-**Read `docs/DSP.md` "Purpose" first — it scopes everything down.** SF2 Scout
-loads an .sf2, plays its samples from MIDI, and shows exactly which zone/sample
-fired, how far it is pitch-stretched, and where its loop points are. It is a
-listening reference for a by-ear recreation workflow on hardware. It is NOT a
-SoundFont synthesizer, NOT a converter, and must never grow export/record/save.
-Days-scale project; resist scope growth.
+## Scope layer — 2026-09-12 (user directive): **v2 = universal source player + exporter**
 
-## Scope layer — 2026-09-03 (user directive): WAV loop editing = Slot W
+**Read `docs/SCOUT_v2_SPEC.md` first — it is the behaviour canon and it
+SUPERSEDES `docs/DSP.md`, `docs/SF2SCOUT_WAV_EXTENSION.md` and
+`docs/LOOP_BENCH_SPEC.md`** (kept verbatim for history; where they conflict
+with v2, v2 wins). What changed:
+
+- **Sources**: WAV (JUCE-free own reader), SoundFont (TinySoundFont parse, own
+  playback), and **tracker modules** (.mod .xm .it .s3m + every libopenmpt
+  format) via the vendored **libopenmpt 0.8.9 soundlib** (BSD-3,
+  `third_party/libopenmpt/`, compiled as the static lib `openmpt_soundlib`).
+  Schism Tracker source is GPL — reference reading only, never copied.
+- **Export is a first-class feature.** The old "no export / no save" rule is
+  RETIRED. Any sample from any source may be exported as a loop-tagged WAV
+  (`smpl` inclusive end + `bext` provenance). What stays absolute: **SF2 and
+  module files are read-only containers — never written.** Only WAV files are
+  ever written, and Slot W's SAVE (round-trip into the loaded WAV) is refused
+  for a decoded sample (it routes to SAVE AS).
+- **Bridge model (0.5.0)**: a tracker sample or an SF2 zone is DECODED into a
+  `WavSample` (`ModuleSource::decode`, `SoundFontBank::decodeZone`,
+  `WavSample::fromPcm16`) and installed in Slot W, so playback, the loop
+  editor and the exporter are the same code path for every source. The
+  module's own loop (fwd / ping-pong; IT sustain loop preferred while held)
+  seeds the markers; tuning travels as the WAV's sample rate (C-5 frequency)
+  with root 60 / 0 cents.
+- **Build order (spec)**: 1 sources + playback ← **0.5.0 lands this** (module
+  load, sample chooser, SF2 zone → W, export via SAVE AS) · 2 editor ·
+  3 export extras (EXPORT RANGE, BATCH, native-vs-16-bit options) · 4 A/B
+  slots, assists, metadata boxes, SOURCE LIST panel, polish.
+
+## Scope layer — 2026-09-03 (user directive): WAV loop editing = Slot W (folded into v2)
 
 `docs/SF2SCOUT_WAV_EXTENSION.md` (received verbatim) adds a second source
 slot: load the user's own hardware-recorded WAVs, set/audition loop points
@@ -97,7 +120,8 @@ C4). Where this layer conflicts with an earlier phase plan, this layer wins.
 | Doc | Authoritative for |
 |---|---|
 | `SSOT.md` | which file is canon per fact domain (unsigned until the operator signs) |
-| `docs/DSP.md` | behaviour: scope, play modes, release, what to ignore, NON-features, acceptance tests, build order. **Verbatim import of `SF2_AUDITIONER_SPEC.md` (2026-08-29).** |
+| `docs/SCOUT_v2_SPEC.md` | **behaviour canon since 2026-09-12**: sources, playback, editor, export, acceptance, build order. Received verbatim from the operator. |
+| `docs/DSP.md` | SUPERSEDED by v2 (kept verbatim: the 2026-08-29 auditioner spec). Still the reference for SF2-side details v2 does not restate (play modes, what to ignore from the SF2 spec). |
 | `docs/handoff-gui-v1/README.md` | appearance: every colour, size, font, spacing, interaction of the face. Verbatim from the gui-claude bundle (2026-08-29). `docs/handoff-gui-v1/handoff-manifest.json` is the machine-checked part (**derived** by vm-claude — a native one is requested for v2). |
 | `PROJECT-NOTES.md` STATE | current state — deployed build, validator, params, pending |
 | `breakpoint.md` | session-end snapshot, subordinate to STATE |
@@ -108,10 +132,11 @@ C4). Where this layer conflicts with an earlier phase plan, this layer wins.
 
 ## §2 Non-negotiable rules
 
-1. **NON-features are absolute** (docs/DSP.md): no audio export, no sample
-   extraction, no save-as, no drag-out of audio, no preset editing, no writing
-   to the SF2, no hosting inside The Dreamer. A request that touches these is
-   surfaced to the operator, never quietly built. `.gitignore` refuses `*.sf2`.
+1. **Containers are read-only** (docs/SCOUT_v2_SPEC.md): SF2 and module files
+   are never written, no preset/pattern editing, no hosting inside The Dreamer.
+   Export (WAV out of any source) IS a feature since v2 — the writer is
+   `writeWav` and it only ever serialises a `WavSample`. `.gitignore` refuses
+   `*.sf2` and module files; test modules live in `scratch/modules/` (untracked).
 2. **Parameter IDs are a public API.** `masterGain`, `mode`, `midiChannel` —
    append-only, never rename/reorder (`Source/PluginProcessor.h` `ParamId`).
    Encoding at the decoder: float normalised 0..1; choice = int index.
@@ -136,9 +161,12 @@ C4). Where this layer conflicts with an earlier phase plan, this layer wins.
 ```
 cmake -B build -S . -G "Visual Studio 17 2022" -A x64 -DFETCHCONTENT_SOURCE_DIR_JUCE=C:/rhino/deps/JUCE
 cmake --build build --config Release --parallel
-scratch\build_test.cmd            # engine harness (cl.exe, JUCE-free) -> ALL CHECKS PASSED
+cmake --build build --config Release --target test_engine && build\Release\test_engine.exe   # harness -> ALL CHECKS PASSED
+build\Release\test_engine.exe --probe <module> [outDir]      # real-file diagnostic: sample table (+ export every sample)
 powershell -ExecutionPolicy Bypass -File C:\code-bank\validator\validate.ps1 -Project C:\sf2-scout
 ```
+The harness is a CMake target since 0.5.0 (it links `openmpt_soundlib`); it is
+still JUCE-free. First configure compiles ~150 soundlib TUs once (~3 min).
 Artefacts: `build\Sf2Scout_artefacts\Release\VST3\SF2 Scout.vst3`,
 `build\Sf2Scout_artefacts\Release\Standalone\SF2 Scout.exe`.
 Deploy targets: `validator.json` `deploy.targets`. Compiles go through
@@ -153,6 +181,15 @@ Deploy targets: `validator.json` `deploy.targets`. Compiles go through
 | 2 | Own read-pointer path: two modes, release fade, 32-voice pool | acceptance 2, 3, 5 — harness `[authored]` `[looponly]` `[pitch]` `[release]` + operator ear | harness green (112 checks incl. hostile-pitch/seqlock/sample-id/stereo-pair/pool-bound), unaudited |
 | 3 | Info readout + zone piano strip | acceptance 4 — chromatic scale across a zone boundary flips the readout at the boundary key | code complete, unaudited |
 | 4 | Drag-drop, polish, pluginval 5, Cubase 15 | acceptance 6, 7 | pluginval 5 PASS 2026-08-30 |
+
+v2 build order (docs/SCOUT_v2_SPEC.md "Build order") — supersedes the table above for new work:
+
+| v2 step | Scope | Gate | Status |
+|---|---|---|---|
+| 1 | Sources + playback: WAV / SF2 / module load, sample list, MIDI play with own loops | v2 acceptance 1 (GM SF2, .it with ping-pong, .xm, .mod, 32f WAV all list, play in tune, honour loops, no crash on junk) | **0.5.0 code complete**: harness `[mod-load]` `[mod-play]`; probe-verified on real MOD/XM/IT (ping-pong + IT 2.14 compressed); operator ear pending |
+| 2 | Editor (waveform, markers, nudge, seam) + loop modes + fades | acceptance 2, 4 | already in place from Slot W (0.2.0–0.4.0); applies to decoded samples unchanged |
+| 3 | Export: smpl/bext writer ✔, EXPORT RANGE, BATCH, native/16-bit options, Cubase validation | acceptance 3, 5, 6 | writer + SAVE AS ✔ (any source); RANGE / BATCH / stereo-fold options open |
+| 4 | A/B slots, SUGGEST / CLICK METER / LOUDNESS, metadata boxes, zone map ✔, SOURCE LIST panel, polish | acceptance 7, 8 | open (SC-016 carries the assists) |
 
 ## §5 Test material
 

@@ -87,6 +87,15 @@ private:
     ui::FlatButton unloadWavButton_ { "UNLOAD", ui::col::inset, ui::col::text2, ui::col::hoverBtn, 4.0f, ui::mono (10.0f, true), true };
     void unloadSf2();
     void unloadWav (bool askIfDirty);
+    // v2 sources: module container -> Slot W, SF2 zone -> Slot W
+    ui::FlatButton toWavButton_ { juce::String::fromUTF8 ("\xE2\x86\x92 W"), ui::col::inset, ui::col::text2, ui::col::hoverBtn, 3.0f, ui::mono (10.0f, true), true };
+    void sendZoneToWav();
+    void loadModuleFile (const juce::File& f);
+    void showSamplePopup();
+    void stepModuleSample (int delta);
+    void mouseDown (const juce::MouseEvent&) override;
+    juce::Rectangle<int> wavLabelBounds() const;
+    static bool isModuleName (const juce::String& path);
     ui::NumField splitField_;
 
     // body
