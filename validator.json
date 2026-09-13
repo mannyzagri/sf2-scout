@@ -20,7 +20,7 @@
         "expect": [
           "ALL CHECKS PASSED",
           "0 failures",
-          "284 checks, 0 failures",
+          "347 checks, 0 failures",
           "[load]",
           "[authored]",
           "[looponly]",
@@ -29,7 +29,7 @@
           "[malformed]",
           "[swap]",
           "[hostile-pitch]",
-          "[seqlock]",
+          "[last-note]",
           "[sample-id]",
           "[stereo-pair]",
           "[pool-bound]",
@@ -39,11 +39,13 @@
           "[wav-pingpong]",
           "[wav-oneshot]",
           "[wav-release]",
-          "[wav-focus]",
+          "[routing]",
           "[wav-smpl]",
+          "[export]",
           "[markers]",
-          "[focus-fallback]",
+          "[routing-fallback]",
           "[unload]",
+          "[assists]",
           "[mod-load]",
           "[mod-play]"
         ]

@@ -1,56 +1,49 @@
-# breakpoint — sf2-scout (overwrite-only; subordinate to PROJECT-NOTES.md STATE)
+# breakpoint — session-end snapshot (subordinate to PROJECT-NOTES.md STATE)
 
-**Session end: 2026-09-12, vm-claude — v2 build order 1 (0.5.0).**
+Written 2026-09-13 by vm-claude at the end of the GUI handoff v2 pass.
 
 ## Where things stand
 
-- The operator's `SCOUT_v2_SPEC.md` (share drop, 2026-09-12) is ingested as
-  `docs/SCOUT_v2_SPEC.md` and is the behaviour canon (CLAUDE.md scope layer;
-  SSOT amendment **UNSIGNED**). Export is a feature; containers stay read-only.
-- libopenmpt 0.8.9 soundlib vendored (`third_party/libopenmpt/`, BSD-3) and
-  compiled as `openmpt_soundlib`. `ModuleSource` decodes any tracker sample
-  into a `WavSample`; `SoundFontBank::decodeZone` does the same for an SF2
-  zone; both land in Slot W and export through the existing writer.
-- Harness = CMake target `test_engine`, **284 checks** green, `--probe` mode
-  verified on real MOD / XM / IT files (`scratch/modules/`, untracked).
-- Release build clean, standalone smoke-launched. **0.5.0 DEPLOYED** to the
-  share Builds (release.ps1 -Force, pluginval 5 PASS). **Not merged** — 0.2.0
-  through 0.5.0 all wait on the operator's ear verdict (STATE).
-- The share's `sf2-scout-src/` is the 2026-08-30 v0.1.0 snapshot (byte-identical
-  to commit dc1ab5a): it is NOT newer than the repo. `validator.json srcExport`
-  refreshes it on ship.
+- **0.6.0 is built, validated and deployed** (VST3 to `C:\sf2-scout\SF2 Scout.vst3`
+  and `\\VBOXSVR\vagrant\Builds\SF2 Scout.vst3`, `SF2 Scout.exe` copied to the
+  share `Builds\`). pluginval strictness 5 SUCCESS, harness 347 / 0. Branch
+  `feat/v2`; nothing merged to `main` (still 0.1.0). Commit hash: `git log -1`.
+- The whole v2 face from `docs/handoff-gui-v2/` is in, plus the engine /
+  processor work it needed (three-slot decoded-sample engine, sources model,
+  assists, export range / batch / conversion, metadata, session state).
+  CHANGELOG SC-031..SC-043.
+- The operator has NOT seen it. First look + ear pass (EAR-GATE 13–20 and the
+  older 1–12) is the gate; expect a defect list.
+
+## Assumptions the pass was built on (reversible, OPEN QUESTIONS 11–14)
+
+scalable window (handoff) vs "fixed" (kickoff); 16 voices (spec) vs 32 (v1);
+stereo sources export mono (SUM / L ONLY); manifest param-id renames ignored
+(contract ids kept). Also D-7..D-10 in CLAUDE.md §6.
 
 ## Fresh-session entry ramp
 
-1. `git pull` (mac lane not open; still the rule). Branch `feat/v2`.
-2. Read CLAUDE.md §"Scope layer 2026-09-12", PROJECT-NOTES STATE, this file,
-   `comms\to-vm.md`, and `docs/SCOUT_v2_SPEC.md`.
-3. Fold the ear verdict (EAR-GATE 1–12). Then v2 build order 3: EXPORT RANGE
-   and BATCH export (whole module / whole preset, `<SOURCE>_<name>_<NOTE>.wav`,
-   skip-existing) — the bridge functions already give every sample as a
-   `WavSample`, so batch = loop over `decode`/`decodeZone` + `writeWav`.
-4. Any change: harness (`cmake --build build --config Release --target test_engine`)
-   → `release.ps1 -DryRun` → `release.ps1` → `ship.ps1`.
+1. Read CLAUDE.md, then STATE, then this file, then `comms/to-vm.md` and the
+   mailbox `from-gui/` (a manifest re-emit or a defect list may be waiting).
+2. `cmake --build build --config Release --target test_engine && build\Release\test_engine.exe`
+   → 347 checks. `validate.ps1 -Project C:\sf2-scout` → 8 PASS.
+3. To SEE the face on this VM: launch the standalone; loaded states are
+   reached by injecting a session into `%APPDATA%\SF2 Scout\SF2 Scout.settings`
+   and driving buttons through UI Automation (memory note `vm-gui-automation`;
+   scripts were in the 2026-09-13 session scratchpad `shot/inject.ps1`).
+   Mouse / keyboard injection does not work in this RDP session.
+4. Test material (untracked): `scratch/modules/*.it .mod .xm`, exported WAVs in
+   `scratch/modules/out/` and `scratch/export-test/`. No SF2 on the VM — the
+   operator's SoundFonts are on the host.
 
-## Gotchas learned this session
+## Known soft spots to keep an eye on
 
-- libopenmpt's PUBLIC API has no sample PCM / loop flags; read
-  `OpenMPT::CSoundFile` + `ModSample` directly with `LIBOPENMPT_BUILD` defined.
-  `AssertHandler` must be provided by us (no-op in ModuleSource.cpp).
-- `ModSample::GetSampleRate(type)` already folds MOD/XM finetune + relative
-  note into Hz (and the PAL 8287 Hz for MOD); IT/S3M give nC5Speed.
-- libopenmpt loop ends are EXCLUSIVE; `WavSample` wants INCLUSIVE.
-- Perl `s|a|b|` with `\|` inside the pattern corrupts the file on this VM —
-  use another delimiter (`s{}{}`) for edits containing `||`.
-
-## Git
-
-- `main` @ v0.1.0 (pushed). `feat/slot-w` @ 808696b (0.2.0–0.4.0, unmerged).
-- `feat/v2` = this session's 0.5.0 commit (see `git log -1`), pushed.
-
-## Artefacts of this session
-
-- `build\Sf2Scout_artefacts\Release\VST3\SF2 Scout.vst3`, `...\Standalone\SF2 Scout.exe`
-- `build\Release\test_engine.exe` (harness + `--probe`)
-- `scratch\modules\` — three public-domain test modules from modarchive.org
-  (fading_horizon.mod, eternity.xm, fall_in_love.it) + exported WAVs in `out\`
+- `ScoutProcessor::installSlot`: a shared sample is kept alive in
+  `engineHeld_` until every slot retired it; `~ScoutProcessor` calls
+  `engine_.forgetAll()` before the maps die. Do not reintroduce `delete` on
+  a pointer that came from `decoded_`.
+- The readout / editor rebuild is generation-driven (`sourceGeneration()`);
+  assists (click ratio, loudness) recompute at most every 120 ms.
+- `handoff-lint` still reports 2 mismatches until gui-claude re-emits the
+  manifest in the lint's shape (`controls` = the 3 params, `widgets` = the
+  rest, contract ids). Record the operator's rulings as `rulings` entries then.

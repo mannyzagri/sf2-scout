@@ -25,8 +25,8 @@ what this project owns.
 | Project scope, era declaration, GUI type, naming contract, exemptions/deviations | `CLAUDE.md` | point only |
 | Behaviour: sources, playback, editor, export, acceptance tests, build order | `docs/SCOUT_v2_SPEC.md` (received verbatim 2026-09-12; supersedes `docs/DSP.md`, `docs/SF2SCOUT_WAV_EXTENSION.md`, `docs/LOOP_BENCH_SPEC.md`) — **PROPOSED, unsigned: see amendment log** | point only |
 | SF2-side detail v2 does not restate (play modes, what is ignored from the SF2 spec) | `docs/DSP.md` (the kickoff spec, imported verbatim) | point only |
-| Appearance: layout, tokens, typography, interactions, state model of the face | `docs/handoff-gui-v1/README.md` | point only |
-| Machine-checked face contract (canvas, controls, actions) | `docs/handoff-gui-v1/handoff-manifest.json` (provenance `derived`) | point only |
+| Appearance: layout, tokens, typography, interactions, state model of the face | `docs/handoff-gui-v2/README.md` (+ `SF2 Scout v2.dc.html` for interactions; received verbatim 2026-09-13; supersedes `docs/handoff-gui-v1/`) — **PROPOSED, unsigned: see amendment log** | point only |
+| Machine-checked face contract (canvas, controls, actions) | `docs/handoff-gui-v2/handoff-manifest.json` (native, gui-claude; shape re-emit pending) — **PROPOSED, unsigned** | point only |
 | Parameter IDs and encodings | `Source/PluginProcessor.h` (`ParamId`) | restate freely |
 | Engine invariants (loop semantics, pitch math, release, bank handoff) | `tests/test_engine.cpp` (executable) | point only |
 | Validator matrix + thresholds | `validator.json` (repo ROOT — `code-bank/validator/configs/` holds dated exports only) | restate freely |
@@ -48,4 +48,14 @@ Any role may propose; only the human enacts. Unsigned change = defect.
             operator's v2 directive, received verbatim from the share); export
             becomes a feature, containers stay read-only. DSP.md remains canon
             only for SF2-side detail v2 does not restate.
+    Ratified-by: ____________   (UNSIGNED — operator to sign)
+
+    Proposed-by: vm-claude
+    Date: 2026-09-13
+    Change: appearance canon moves from docs/handoff-gui-v1/ to
+            docs/handoff-gui-v2/ (gui-claude's "Plugin GUI.zip", received
+            verbatim 2026-09-13, built as 0.6.0); the machine-checked face
+            contract becomes its NATIVE handoff-manifest.json (a re-emit in the
+            lint's shape is pending). Engine invariants stay in tests/test_engine.cpp
+            (now the three-slot decoded-sample model).
     Ratified-by: ____________   (UNSIGNED — operator to sign)

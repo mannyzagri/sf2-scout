@@ -1,8 +1,9 @@
-// Design tokens -- verbatim from docs/handoff-gui-v1/README.md "Design Tokens".
-// Fonts: IBM Plex is not bundled (recorded deviation D-2); the handoff's own
-// substitution rule applies -- JUCE default sans + a monospace, sans/mono split kept.
+// Design tokens -- verbatim from docs/handoff-gui-v2/README.md "Design tokens"
+// (unchanged v1 set + the v2 additions). Fonts: IBM Plex Sans / Mono bundled
+// (BinaryData, see Fonts.h) -- deviation D-2 retired by handoff v2.
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
+#include "Fonts.h"
 
 namespace sf2scout::ui
 {
@@ -38,27 +39,28 @@ namespace col
     inline const juce::Colour switchTrack= hex (0xe2e2db);
     inline const juce::Colour barBase    = hex (0xe6e6df);
     inline const juce::Colour hoverBtn   = hex (0xeef2f7);
+    // v2 additions
+    inline const juce::Colour mStart     = hex (0x4c9a5e);
+    inline const juce::Colour mEnd       = hex (0xc2453a);
+    inline const juce::Colour wave       = hex (0x2e5c8a);
+    inline const juce::Colour playhead   = hex (0xd9772b);
+    inline const juce::Colour badgeSf2   = accent;
+    inline const juce::Colour badgeMod   = okDot;
+    inline const juce::Colour badgeWav   = warn;
+    inline const juce::Colour badgeErr   = mEnd;
+    inline const juce::Colour periodsWarnBg = hex (0xfbeee2);
+    inline const juce::Colour clickYellow = hex (0xd9b52b);
+    inline const juce::Colour slotA      = accent;
+    inline const juce::Colour slotB      = text2;
 }
 
-inline juce::Font sans (float px, bool medium = false)
-{
-    return juce::Font (juce::FontOptions (px, medium ? juce::Font::bold : juce::Font::plain));
-}
-inline juce::Font mono (float px, bool medium = false)
-{
-    return juce::Font (juce::FontOptions ("Consolas", px, medium ? juce::Font::bold : juce::Font::plain));
-}
-// "Small label: Sans 400 10 px, letter-spacing .1em, uppercase, #8a8a80"
-inline juce::Font smallLabel()
-{
-    juce::Font f = sans (10.0f);
-    f.setExtraKerningFactor (0.1f);
-    return f;
-}
-inline juce::Font buttonFont()
-{
-    juce::Font f = sans (12.0f, true);
-    f.setExtraKerningFactor (0.08f);
-    return f;
-}
+// ---- type scale (README "Type scale (Plex)")
+inline juce::Font smallLabel()  { return fonts::sans (10.0f, fonts::Weight::Medium, 1.0f); }     // uppercase, colour label
+inline juce::Font buttonFont()  { return fonts::sans (11.0f, fonts::Weight::Bold, 0.9f); }       // uppercase
+inline juce::Font listHeader()  { return fonts::sans (9.0f, fonts::Weight::Medium, 0.8f); }      // text3
+inline juce::Font nameFont (bool medium = false) { return fonts::sans (12.0f, medium ? fonts::Weight::Medium : fonts::Weight::Regular); }
+inline juce::Font sans (float px, fonts::Weight w = fonts::Weight::Regular) { return fonts::sans (px, w); }
+inline juce::Font mono (float px, bool bold = false) { return fonts::mono (px, bold ? fonts::Weight::Bold : fonts::Weight::Regular); }
+inline juce::Font badgeFont()   { return fonts::mono (9.0f, fonts::Weight::Bold, 0.5f); }
+inline juce::Font segFont (float px = 11.0f) { return fonts::mono (px, fonts::Weight::Bold); }
 }

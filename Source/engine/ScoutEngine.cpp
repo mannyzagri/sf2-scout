@@ -10,12 +10,12 @@ ScoutEngine::ScoutEngine() = default;
 ScoutEngine::~ScoutEngine()
 {
     // Whatever is still parked belongs to us at teardown.
-    delete active_;
-    delete pending_.exchange (nullptr);
-    delete retired_.exchange (nullptr);
-    delete activeWav_;
-    delete pendingWav_.exchange (nullptr);
-    delete retiredWav_.exchange (nullptr);
+    for (auto& s : slots_)
+    {
+        delete s.active;
+        delete s.pending.exchange (nullptr);
+        delete s.retired.exchange (nullptr);
+    }
 }
 
 void ScoutEngine::prepare (double sampleRate)
@@ -28,125 +28,122 @@ void ScoutEngine::reset()
 {
     for (auto& v : voices_) v = Voice {};
     activeVoices_.store (0, std::memory_order_relaxed);
-    lastPlayhead_.store (-1.0, std::memory_order_relaxed);
-    lastWavPlayhead_.store (-1.0, std::memory_order_relaxed);
+    for (auto& s : slots_) s.lastPlayhead.store (-1.0, std::memory_order_relaxed);
 }
 
-// ------------------------------------------------------------------ Slot W handoff
-void ScoutEngine::setWav (WavSample* wav)
+// ------------------------------------------------------------------ slot handoff
+WavSample* ScoutEngine::setSlot (int slot, WavSample* sample)
 {
-    WavSample* prev = pendingWav_.exchange (wav, std::memory_order_acq_rel);
-    delete prev;   // superseded before the audio thread saw it
+    if (slot < 0 || slot >= kSlots) return sample;
+    Slot& s = slots_[(size_t) slot];
+    s.requested.store (sample, std::memory_order_release);
+    // a sample superseded before the audio thread saw it goes back to the caller: nothing points into it
+    return s.pending.exchange (sample, std::memory_order_acq_rel);
 }
 
-WavSample* ScoutEngine::takeRetiredWav()
+WavSample* ScoutEngine::takeRetired (int slot)
 {
-    return retiredWav_.exchange (nullptr, std::memory_order_acq_rel);
+    if (slot < 0 || slot >= kSlots) return nullptr;
+    return slots_[(size_t) slot].retired.exchange (nullptr, std::memory_order_acq_rel);
 }
 
-void ScoutEngine::clearBank()
+WavSample* ScoutEngine::clearSlot (int slot)
 {
-    requested_.store (nullptr, std::memory_order_release);
-    delete pending_.exchange (nullptr, std::memory_order_acq_rel);   // a bank that never reached the audio thread
-    clearBank_.store (true, std::memory_order_release);
+    if (slot < 0 || slot >= kSlots) return nullptr;
+    Slot& s = slots_[(size_t) slot];
+    s.requested.store (nullptr, std::memory_order_release);
+    WavSample* pending = s.pending.exchange (nullptr, std::memory_order_acq_rel);   // never reached the audio thread
+    s.clear.store (true, std::memory_order_release);
+    return pending;
 }
 
-void ScoutEngine::clearWav()
+void ScoutEngine::forgetAll()
 {
-    delete pendingWav_.exchange (nullptr, std::memory_order_acq_rel);
-    clearWav_.store (true, std::memory_order_release);
+    for (auto& v : voices_) v = Voice {};
+    for (auto& s : slots_)
+    {
+        s.active = nullptr;
+        s.pending.store (nullptr, std::memory_order_release);
+        s.retired.store (nullptr, std::memory_order_release);
+        s.requested.store (nullptr, std::memory_order_release);
+        s.clear.store (false, std::memory_order_release);
+    }
+    activeVoices_.store (0, std::memory_order_relaxed);
 }
 
-void ScoutEngine::consumePendingWav()
+void ScoutEngine::consumePending (Slot& s)
 {
-    if (clearWav_.load (std::memory_order_acquire))
+    const int idx = (int) (&s - slots_.data());
+    if (s.clear.load (std::memory_order_acquire))
     {
         // same one-retiree rule as a swap: wait for the collector if it is behind
-        if (activeWav_ != nullptr && retiredWav_.load (std::memory_order_acquire) != nullptr) return;
-        clearWav_.store (false, std::memory_order_release);
-        for (auto& v : voices_) if (v.isWav) v = Voice {};
-        lastWavPlayhead_.store (-1.0, std::memory_order_relaxed);
-        lastWavNote_.store (-1, std::memory_order_relaxed);
-        if (activeWav_ != nullptr) retiredWav_.store (activeWav_, std::memory_order_release);
-        activeWav_ = nullptr;
+        if (s.active != nullptr && s.retired.load (std::memory_order_acquire) != nullptr) return;
+        s.clear.store (false, std::memory_order_release);
+        for (auto& v : voices_) if (v.slot == idx) v = Voice {};
+        s.lastPlayhead.store (-1.0, std::memory_order_relaxed);
+        s.lastNote.store (-1, std::memory_order_relaxed);
+        if (s.active != nullptr) s.retired.store (s.active, std::memory_order_release);
+        s.active = nullptr;
     }
-    if (pendingWav_.load (std::memory_order_acquire) == nullptr) return;
-    if (activeWav_ != nullptr && retiredWav_.load (std::memory_order_acquire) != nullptr) return;
-    WavSample* p = pendingWav_.exchange (nullptr, std::memory_order_acq_rel);
+    if (s.pending.load (std::memory_order_acquire) == nullptr) return;
+    if (s.active != nullptr && s.retired.load (std::memory_order_acquire) != nullptr) return;
+    WavSample* p = s.pending.exchange (nullptr, std::memory_order_acq_rel);
     if (p == nullptr) return;
-    // only the WAV voices point into the old sample -- the SF2 voices keep playing
-    for (auto& v : voices_) if (v.isWav) v = Voice {};
-    lastWavPlayhead_.store (-1.0, std::memory_order_relaxed);
-    WavSample* old = activeWav_;
-    activeWav_ = p;
-    if (old != nullptr) retiredWav_.store (old, std::memory_order_release);
+    // only this slot's voices point into the old sample -- the others keep playing
+    for (auto& v : voices_) if (v.slot == idx) v = Voice {};
+    s.lastPlayhead.store (-1.0, std::memory_order_relaxed);
+    WavSample* old = s.active;
+    s.active = p;
+    if (old != nullptr) s.retired.store (old, std::memory_order_release);
 }
 
-void ScoutEngine::setWavLoop (uint32_t startFrame, uint32_t endFrameInclusive, WavLoopMode mode)
+// ------------------------------------------------------------------ live state
+void ScoutEngine::setSlotLoop (int slot, uint32_t startFrame, uint32_t endFrameInclusive, LoopKind kind)
 {
-    wavLoop_.store (((uint64_t) startFrame << 32) | (uint64_t) endFrameInclusive, std::memory_order_release);
-    wavLoopMode_.store ((int) mode, std::memory_order_release);
+    if (slot < 0 || slot >= kSlots) return;
+    Slot& s = slots_[(size_t) slot];
+    s.loop.store (((uint64_t) startFrame << 32) | (uint64_t) endFrameInclusive, std::memory_order_release);
+    s.kind.store ((int) kind, std::memory_order_release);
 }
 
-void ScoutEngine::setWavTuning (int rootKey, double fineCents)
+void ScoutEngine::setSlotTuning (int slot, int rootKey, double fineCents)
 {
-    wavRoot_.store (rootKey, std::memory_order_relaxed);
-    wavCents_.store (fineCents, std::memory_order_relaxed);
+    if (slot < 0 || slot >= kSlots) return;
+    slots_[(size_t) slot].root.store (rootKey, std::memory_order_relaxed);
+    slots_[(size_t) slot].cents.store (std::isfinite (fineCents) ? fineCents : 0.0, std::memory_order_relaxed);
 }
 
-void ScoutEngine::setWavFades (double attackMs, double releaseMs)
+void ScoutEngine::setSlotFades (int slot, double attackMs, double releaseMs)
 {
-    wavAttackMs_.store (attackMs, std::memory_order_relaxed);
-    wavReleaseMs_.store (releaseMs, std::memory_order_relaxed);
+    if (slot < 0 || slot >= kSlots) return;
+    slots_[(size_t) slot].attackMs.store (attackMs, std::memory_order_relaxed);
+    slots_[(size_t) slot].releaseMs.store (releaseMs, std::memory_order_relaxed);
 }
 
-void ScoutEngine::setFocus (Focus f, int splitNote)
+void ScoutEngine::setKeyboard (KbMode mode, int splitNote, int toggleOn)
 {
-    focus_.store ((int) f, std::memory_order_relaxed);
+    kbMode_.store ((int) mode, std::memory_order_relaxed);
     split_.store (splitNote, std::memory_order_relaxed);
+    toggleOn_.store (toggleOn != 0 ? 1 : 0, std::memory_order_relaxed);
 }
 
-void ScoutEngine::setBank (SoundFontBank* bank)
+int ScoutEngine::routeSlot (KbMode mode, int splitNote, int toggleOn, int note, bool haveA, bool haveB)
 {
-    requested_.store (bank, std::memory_order_release);
-    // If the audio thread never ran since the last setBank, the previous
-    // pending bank is simply superseded -- retire it here.
-    SoundFontBank* prev = pending_.exchange (bank, std::memory_order_acq_rel);
-    delete prev;   // never reached the audio thread, so nothing points into it
-}
-
-SoundFontBank* ScoutEngine::takeRetiredBank()
-{
-    return retired_.exchange (nullptr, std::memory_order_acq_rel);
-}
-
-void ScoutEngine::consumePendingBank()
-{
-    if (clearBank_.load (std::memory_order_acquire))
+    int want = kSlotA;
+    switch (mode)
     {
-        if (active_ != nullptr && retired_.load (std::memory_order_acquire) != nullptr) return;
-        clearBank_.store (false, std::memory_order_release);
-        for (auto& v : voices_) if (! v.isWav) v = Voice {};
-        lastPlayhead_.store (-1.0, std::memory_order_relaxed);
-        if (active_ != nullptr) retired_.store (active_, std::memory_order_release);
-        active_ = nullptr;
+        case KbMode::A:      want = kSlotA; break;
+        case KbMode::B:      want = kSlotB; break;
+        case KbMode::Split:  want = note >= splitNote ? kSlotB : kSlotA; break;
+        case KbMode::Toggle: want = toggleOn != 0 ? kSlotB : kSlotA; break;
     }
-    if (pending_.load (std::memory_order_acquire) == nullptr) return;
-    // Only one retiree can be parked. If the owner thread has not collected
-    // the previous one yet, keep playing the current bank and retry next block.
-    if (active_ != nullptr && retired_.load (std::memory_order_acquire) != nullptr) return;
-    SoundFontBank* p = pending_.exchange (nullptr, std::memory_order_acq_rel);
-    if (p == nullptr) return;
-    // Voices point into the old bank's pool: kill them before it goes away
-    // (the WAV voices point elsewhere and keep playing).
-    for (auto& v : voices_) if (! v.isWav) v = Voice {};
-    lastPlayhead_.store (-1.0, std::memory_order_relaxed);
-    SoundFontBank* old = active_;
-    active_ = p;
-    if (old != nullptr)
-        retired_.store (old, std::memory_order_release);
+    // an empty target falls back to the loaded slot (never a silent keyboard)
+    if (want == kSlotA && ! haveA) want = haveB ? kSlotB : -1;
+    else if (want == kSlotB && ! haveB) want = haveA ? kSlotA : -1;
+    return want;
 }
 
+// ------------------------------------------------------------------ voices
 ScoutEngine::Voice* ScoutEngine::allocateVoice()
 {
     Voice* oldest = nullptr;
@@ -155,163 +152,71 @@ ScoutEngine::Voice* ScoutEngine::allocateVoice()
         if (! v.active) return &v;
         if (oldest == nullptr || v.startOrder < oldest->startOrder) oldest = &v;
     }
-    return oldest;   // oldest-note stealing (spec §2)
+    return oldest;   // oldest-note stealing (spec)
 }
 
-void ScoutEngine::startVoice (const Zone& z, int note, int velocity)
+void ScoutEngine::startVoice (int slot, int note, int velocity)
 {
+    Slot& s = slots_[(size_t) slot];
+    if (s.active == nullptr || s.active->frames == 0) return;
     Voice* vp = allocateVoice();
     if (vp == nullptr) return;
     Voice& v = *vp;
     v = Voice {};
     v.active = true;
-    v.note = note;
-    v.zone = &z;
-    v.startOrder = ++orderCounter_;
-
-    // Pitch: mirror TSF's calc (transpose + tune, keytrack scaling about root).
-    // F1 (BLOCKER): z.transpose/z.keytrack/z.tuneCents are already clamped at
-    // load time (SoundFontBank::load), but keytrack can still amplify an
-    // in-range note+transpose deviation into an astronomical exponent (e.g.
-    // keytrack=1200% with a +120 semitone transpose at note 127 -> 2^187).
-    // std::pow of that either overflows to +inf or, after further arithmetic,
-    // can go non-finite/non-positive -- either would spin renderVoice's read
-    // pointer forever. Clamp defensively, after the fact, on the computed step
-    // itself: this is the last line of defence, independent of what generator
-    // values produced it.
-    const double n = note + z.transpose + z.tuneCents / 100.0;
-    const double adjusted = z.rootKey + (n - z.rootKey) * (z.keytrack / 100.0);
-    double baseStep = std::pow (2.0, (adjusted - z.rootKey) / 12.0) * (double) z.sampleRate / sampleRate_;
-    if (! std::isfinite (baseStep) || baseStep <= 0.0) baseStep = 1.0;
-    baseStep = std::max (1.0 / 256.0, std::min (256.0, baseStep));
-    v.baseStep = baseStep;
-    double step = v.baseStep * std::pow (2.0, bendSemis_ / 12.0);
-    if (! std::isfinite (step) || step <= 0.0) step = v.baseStep;
-    v.step = std::max (1.0 / 256.0, std::min (256.0, step));
-
-    // Level: sqrt velocity curve, no SF2 attenuation (spec §2).
-    v.gain = std::sqrt (std::max (1, std::min (127, velocity)) / 127.0f);
-    // Linear pan from the region's pan (-1..+1); centre = unity on both sides,
-    // so a mono sample's level is exactly its velocity gain (no SF2 attenuation).
-    const float p = std::max (-1.0f, std::min (1.0f, z.pan));
-    v.panL = 1.0f - std::max (0.0f, p);
-    v.panR = 1.0f + std::min (0.0f, p);
-    // F11: an untouched (pan==0) stereo half is authored to sit hard left/right,
-    // not centre -- SF2's own linked-sample convention (sampleType 4 = left half,
-    // 2 = right half). Only a region that never set a pan generator gets this;
-    // an explicit pan (z.pan != 0) always wins via the general case above.
-    if (z.pan == 0.0f && z.isStereoHalf())
-    {
-        if (z.sampleType == 4)      { v.panL = 1.0f; v.panR = 0.0f; }   // left half
-        else if (z.sampleType == 2) { v.panL = 0.0f; v.panR = 1.0f; }   // right half
-    }
-
-    v.playEnd = (double) z.playEnd;
-    const bool hasLoop = z.hasLoop();
-    if (mode_ == PlayMode::LoopOnly)
-    {
-        if (hasLoop) { v.loopStart = z.loopStart; v.loopEnd = z.loopEnd; }
-        else         { v.loopStart = z.playStart; v.loopEnd = z.playEnd; }   // whole sample
-        v.loop = v.loopEnd > v.loopStart + 1;
-        v.pos  = v.loopStart;
-    }
-    else
-    {
-        v.loop = hasLoop;
-        v.loopStart = z.loopStart; v.loopEnd = z.loopEnd;
-        v.pos  = z.playStart;
-    }
-    v.fade = 1.0f;
-    v.fadeStep = 0.0f;
-    for (auto& o : voices_) o.isLatest = false;
-    v.isLatest = true;
-}
-
-void ScoutEngine::startWavVoice (int note, int velocity)
-{
-    Voice* vp = allocateVoice();
-    if (vp == nullptr) return;
-    Voice& v = *vp;
-    v = Voice {};
-    v.active = true;
-    v.isWav = true;
+    v.slot = slot;
     v.note = note;
     v.startOrder = ++orderCounter_;
     // transpose from the root key + fine tune (equal temperament about the root, A4 = 440)
-    const double root  = (double) wavRoot_.load (std::memory_order_relaxed) + wavCents_.load (std::memory_order_relaxed) / 100.0;
-    double baseStep = std::pow (2.0, ((double) note - root) / 12.0) * (double) activeWav_->sampleRate / sampleRate_;
+    const double root = (double) s.root.load (std::memory_order_relaxed) + s.cents.load (std::memory_order_relaxed) / 100.0;
+    double baseStep = std::pow (2.0, ((double) note - root) / 12.0) * (double) s.active->sampleRate / sampleRate_;
+    // the last line of defence against a hostile rate/root: the step itself is clamped
     if (! std::isfinite (baseStep) || baseStep <= 0.0) baseStep = 1.0;
     v.baseStep = std::max (1.0 / 256.0, std::min (256.0, baseStep));
     double step = v.baseStep * std::pow (2.0, bendSemis_ / 12.0);
     if (! std::isfinite (step) || step <= 0.0) step = v.baseStep;
     v.step = std::max (1.0 / 256.0, std::min (256.0, step));
-    v.gain = std::sqrt (std::max (1, std::min (127, velocity)) / 127.0f);
-    v.panL = v.panR = 1.0f;
-    v.pos = 0.0;
+    v.gain = std::sqrt (std::max (1, std::min (127, velocity)) / 127.0f);   // sqrt velocity curve (D-4)
     v.dir = 1;
-    const double attackMs = std::max (0.0, wavAttackMs_.load (std::memory_order_relaxed));
+    // audition variant: LOOP-ONLY starts inside the loop
+    const uint64_t packed = s.loop.load (std::memory_order_acquire);
+    const double lStart = (double) (uint32_t) (packed >> 32);
+    v.pos = mode_ == PlayMode::LoopOnly ? std::min (lStart, (double) s.active->frames - 1.0) : 0.0;
+    const double attackMs = std::max (0.0, s.attackMs.load (std::memory_order_relaxed));
     if (attackMs > 0.0) { v.attack = 0.0f; v.attackStep = (float) (1.0 / (attackMs * 0.001 * sampleRate_)); }
     else                { v.attack = 1.0f; v.attackStep = 0.0f; }
-    for (auto& o : voices_) o.isLatest = false;
+    for (auto& o : voices_) if (o.slot == slot) o.isLatest = false;
     v.isLatest = true;
-    lastWavNote_.store (note, std::memory_order_relaxed);
+    s.lastNote.store (note, std::memory_order_relaxed);
+    s.lastVel.store (velocity, std::memory_order_relaxed);
+    s.noteSeq.fetch_add (1, std::memory_order_relaxed);
 }
 
 void ScoutEngine::noteOn (int note, int velocity)
 {
-    // F8 (NIT): kept deliberately. noteOn() is an audio-thread API and the
-    // harness (and a real host feeding MIDI slightly ahead of the first
-    // process() call) can call it before any process() has run, so `active_`
-    // would otherwise still be null. Once process() has run at least once for
-    // this bank, pending_ is already null and this is a single relaxed atomic
-    // load that returns immediately -- a no-op, not a duplicate consume.
-    consumePendingBank();
-    consumePendingWav();
+    // noteOn() is an audio-thread API and a host (or the harness) can call it
+    // before any process() has run -- consume handoffs here too (a no-op once
+    // process() has run for the current samples).
+    for (auto& s : slots_) consumePending (s);
     if (note < 0 || note > 127 || velocity <= 0) return;
-    if (routesToWav ((Focus) focus_.load (std::memory_order_relaxed), split_.load (std::memory_order_relaxed), note,
-                     active_ != nullptr, activeWav_ != nullptr))
-    {
-        noteOnWav (note, velocity);
-        return;
-    }
-    if (active_ == nullptr) return;
-    const Zone* zones[8];
-    const int n = active_->findZones (preset_, note, velocity, zones, 8);
-
-    // publish readout first so a UI poll after this block sees the note even
-    // if the zone had no playable sample
-    const Zone* described = n > 0 ? zones[0] : active_->zoneForKey (preset_, note, velocity);
-    int zoneIndex = -1;
-    if (described != nullptr)
-    {
-        const auto& zs = active_->presets()[(size_t) preset_].zones;
-        zoneIndex = (int) (described - zs.data());
-    }
-    // F5 seqlock write side: odd while the four fields below are in flight,
-    // even once they're all consistent. See the comment on lastNote()/lastSeq_.
-    lastSeq_.fetch_add (1, std::memory_order_acq_rel);   // -> odd: write in progress
-    lastPreset_.store (preset_, std::memory_order_relaxed);
-    lastNoteNum_.store (note, std::memory_order_relaxed);
-    lastVel_.store (velocity, std::memory_order_relaxed);
-    lastZone_.store (zoneIndex, std::memory_order_relaxed);
-    lastSeq_.fetch_add (1, std::memory_order_release);   // -> even: write complete
-
-    for (int i = 0; i < n; ++i)
-        startVoice (*zones[i], note, velocity);
+    const int slot = routeSlot ((KbMode) kbMode_.load (std::memory_order_relaxed), split_.load (std::memory_order_relaxed),
+                                toggleOn_.load (std::memory_order_relaxed), note,
+                                slots_[kSlotA].active != nullptr, slots_[kSlotB].active != nullptr);
+    if (slot < 0) return;
+    startVoice (slot, note, velocity);
 }
 
-void ScoutEngine::noteOnWav (int note, int velocity)
+void ScoutEngine::noteOnSlot (int slot, int note, int velocity)
 {
-    consumePendingWav();
-    if (activeWav_ == nullptr || note < 0 || note > 127 || velocity <= 0) return;
-    startWavVoice (note, velocity);
+    if (slot < 0 || slot >= kSlots) return;
+    consumePending (slots_[(size_t) slot]);
+    if (note < 0 || note > 127 || velocity <= 0) return;
+    startVoice (slot, note, velocity);
 }
 
 void ScoutEngine::beginRelease (Voice& v)
 {
-    // SF2 voices: the fixed protective fade (spec §4). WAV voices: the RELEASE
-    // knob -- the loop keeps cycling underneath the fade either way.
-    const double ms = v.isWav ? std::max (1.0, wavReleaseMs_.load (std::memory_order_relaxed)) : kReleaseMs;
+    const double ms = std::max (1.0, slots_[(size_t) std::max (0, v.slot)].releaseMs.load (std::memory_order_relaxed));
     v.releasing = true;
     v.fadeStep = (float) (1.0 / (ms * 0.001 * sampleRate_));
 }
@@ -323,26 +228,35 @@ void ScoutEngine::noteOff (int note)
             beginRelease (v);
 }
 
+void ScoutEngine::noteOffSlot (int slot, int note)
+{
+    for (auto& v : voices_)
+        if (v.active && ! v.releasing && v.note == note && v.slot == slot)
+            beginRelease (v);
+}
+
 void ScoutEngine::allNotesOff()
 {
     for (auto& v : voices_)
         if (v.active && ! v.releasing) beginRelease (v);
 }
 
-void ScoutEngine::renderWavVoice (Voice& v, float* left, float* right, int numSamples, float gain)
+void ScoutEngine::renderVoice (Voice& v, float* left, float* right, int numSamples, float gain)
 {
-    const WavSample& w = *activeWav_;
+    const Slot& s = slots_[(size_t) v.slot];
+    const WavSample& w = *s.active;
     const float* L = w.L();
     const float* R = w.R();
     const double frames = (double) w.frames;
     const double lastFrame = frames - 1.0;
-    const double lStart = std::min (curLoopStart_, lastFrame);
-    const double lEnd   = std::min (curLoopEnd_, lastFrame);          // INCLUSIVE
-    const WavLoopMode mode = curLoopMode_;
-    const bool loop = mode != WavLoopMode::Off && lEnd > lStart;       // >= 2 frames in the loop
+    const double lStart = std::min (s.curStart, lastFrame);
+    const double lEnd   = std::min (s.curEnd, lastFrame);              // INCLUSIVE
+    // LOOP-ONLY: an "off" loop still loops the marked region (v1 "no loop -> loop the whole sample")
+    LoopKind kind = s.curKind;
+    if (kind == LoopKind::Off && mode_ == PlayMode::LoopOnly) kind = LoopKind::Forward;
+    const bool loop = kind != LoopKind::Off && lEnd > lStart;          // >= 2 frames in the loop
     const double len = lEnd - lStart;                                  // ping-pong half period
-    const float gL = gain * v.gain * v.panL;
-    const float gR = gain * v.gain * v.panR;
+    const float g = gain * v.gain;
     double pos = v.pos;
     int dir = v.dir;
     const double step = v.step;
@@ -355,7 +269,7 @@ void ScoutEngine::renderWavVoice (Voice& v, float* left, float* right, int numSa
     {
         if (loop)
         {
-            if (mode == WavLoopMode::Forward)
+            if (kind == LoopKind::Forward)
             {
                 // wrap [lStart, lEnd]: exclusive end is lEnd + 1 (fmod: one step no matter the overshoot)
                 if (pos > lEnd)
@@ -363,14 +277,12 @@ void ScoutEngine::renderWavVoice (Voice& v, float* left, float* right, int numSa
             }
             else if ((dir > 0 && pos > lEnd) || (dir < 0 && pos < lStart))
             {
-                // sample-accurate reflection at either marker: the overshoot past
-                // the marker becomes the same distance back inside it
+                // sample-accurate reflection at either marker
                 if (dir > 0) { pos = 2.0 * lEnd - pos;   dir = -1; }
                 else         { pos = 2.0 * lStart - pos; dir = +1; }
                 if (pos < lStart || pos > lEnd)
                 {
-                    // hostile step longer than the loop: resolve in ONE step by
-                    // folding onto the 2*len triangle measured upward from loopStart
+                    // hostile step longer than the loop: fold onto the 2*len triangle in one step
                     double t = std::fmod (pos - lStart, 2.0 * len);
                     if (t < 0.0) t += 2.0 * len;
                     if (t > len) { pos = lStart + 2.0 * len - t; dir = -1; }
@@ -388,7 +300,7 @@ void ScoutEngine::renderWavVoice (Voice& v, float* left, float* right, int numSa
         const uint32_t i0 = (uint32_t) pos;
         const double frac = pos - (double) i0;
         uint32_t i1 = i0 + 1;
-        if (loop && mode == WavLoopMode::Forward && (double) i1 > lEnd) i1 = (uint32_t) lStart;   // seam interpolates into the loop start
+        if (loop && kind == LoopKind::Forward && (double) i1 > lEnd) i1 = (uint32_t) lStart;   // seam interpolates into the loop start
         else if ((double) i1 >= frames) i1 = i0;
         const float sL = L[i0] + (float) frac * (L[i1] - L[i0]);
         const float sR = R[i0] + (float) frac * (R[i1] - R[i0]);
@@ -399,9 +311,9 @@ void ScoutEngine::renderWavVoice (Voice& v, float* left, float* right, int numSa
             fade -= fadeStep;
             if (fade <= 0.0f) { v.active = false; break; }
         }
-        const float env = fade * attack;
-        left[i]  += sL * env * gL;
-        right[i] += sR * env * gR;
+        const float env = fade * attack * g;
+        left[i]  += sL * env;
+        right[i] += sR * env;
         pos += dir > 0 ? step : -step;
     }
     v.pos = pos;
@@ -410,134 +322,38 @@ void ScoutEngine::renderWavVoice (Voice& v, float* left, float* right, int numSa
     v.attack = attack;
 }
 
-void ScoutEngine::renderVoice (Voice& v, float* left, float* right, int numSamples, float gain)
-{
-    const float* pool = active_->samples();
-    const double poolEnd = (double) active_->sampleCount();
-    const double end = std::min (v.playEnd, poolEnd);
-    const double loopEnd = std::min (v.loopEnd, end);
-    const bool   loop = v.loop && loopEnd > v.loopStart + 1.0;
-    const float  gL = gain * v.gain * v.panL;
-    const float  gR = gain * v.gain * v.panR;
-    double pos = v.pos;
-    const double step = v.step;
-    float fade = v.fade;
-    const float fadeStep = v.fadeStep;
-
-    for (int i = 0; i < numSamples; ++i)
-    {
-        if (loop)
-        {
-            // F1 (BLOCKER): loop length (loopEnd - v.loopStart) is guaranteed
-            // > 1 here (the `loop` flag above requires it), so this fmod is
-            // always a safe divisor. This replaces an unbounded
-            // `while (pos >= loopEnd) pos -= length`: with a hostile/extreme
-            // pitch (see startVoice), pos can be advanced by hundreds of loop
-            // lengths in a single output sample, and that while loop would
-            // iterate that many times PER SAMPLE -- spinning the audio thread.
-            // fmod wraps it in one step regardless of how far pos overshot.
-            if (pos >= loopEnd)
-                pos = v.loopStart + std::fmod (pos - v.loopStart, loopEnd - v.loopStart);
-        }
-        else if (pos >= end - 1.0)
-        {
-            v.active = false;
-            break;
-        }
-        // F1: belt-and-suspenders on the read pointer itself -- never let a
-        // pathological pos (any NaN slipped in, or an edge the wrap above
-        // didn't anticipate) turn into an out-of-bounds pool index.
-        if (! (pos >= 0.0) || pos >= poolEnd)
-        {
-            v.active = false;
-            break;
-        }
-        const uint32_t i0 = (uint32_t) pos;
-        const double   frac = pos - (double) i0;
-        // second tap: wrap inside the loop so the seam interpolates cleanly
-        uint32_t i1 = i0 + 1;
-        if (loop && (double) i1 >= loopEnd) i1 = (uint32_t) v.loopStart;
-        else if ((double) i1 >= end) i1 = i0;
-        const float s = pool[i0] + (float) frac * (pool[i1] - pool[i0]);
-
-        if (v.releasing)
-        {
-            fade -= fadeStep;
-            if (fade <= 0.0f) { v.active = false; break; }
-        }
-        const float out = s * fade;
-        left[i]  += out * gL;
-        right[i] += out * gR;
-        pos += step;
-    }
-    v.pos = pos;
-    v.fade = fade;
-}
-
 void ScoutEngine::process (float* left, float* right, int numSamples, float gain)
 {
-    consumePendingBank();
-    consumePendingWav();
-    if ((active_ == nullptr && activeWav_ == nullptr) || numSamples <= 0)
+    bool any = false;
+    for (auto& s : slots_)
+    {
+        consumePending (s);
+        any = any || s.active != nullptr;
+        // per-block snapshot of the live loop edit (one 64-bit load: never torn)
+        const uint64_t packed = s.loop.load (std::memory_order_acquire);
+        s.curStart = (double) (uint32_t) (packed >> 32);
+        s.curEnd   = (double) (uint32_t) (packed & 0xFFFFFFFFu);
+        s.curKind  = (LoopKind) s.kind.load (std::memory_order_acquire);
+    }
+    if (! any || numSamples <= 0)
     {
         activeVoices_.store (0, std::memory_order_relaxed);
+        for (auto& s : slots_) s.lastPlayhead.store (-1.0, std::memory_order_relaxed);
         return;
     }
-    // per-block snapshot of the live loop edit (one 64-bit load: never torn)
-    const uint64_t packed = wavLoop_.load (std::memory_order_acquire);
-    curLoopStart_ = (double) (uint32_t) (packed >> 32);
-    curLoopEnd_   = (double) (uint32_t) (packed & 0xFFFFFFFFu);
-    curLoopMode_  = (WavLoopMode) wavLoopMode_.load (std::memory_order_acquire);
-
     const double bendFactor = std::pow (2.0, bendSemis_ / 12.0);
     int count = 0;
-    double latestPlayhead = -1.0, latestWavPlayhead = -1.0;
+    double latest[kSlots] = { -1.0, -1.0, -1.0 };
     for (auto& v : voices_)
     {
         if (! v.active) continue;
+        if (v.slot < 0 || v.slot >= kSlots || slots_[(size_t) v.slot].active == nullptr) { v.active = false; continue; }
         v.step = v.baseStep * bendFactor;
-        if (v.isWav)
-        {
-            if (activeWav_ == nullptr) { v.active = false; continue; }
-            renderWavVoice (v, left, right, numSamples, gain);
-            if (v.active) { ++count; if (v.isLatest) latestWavPlayhead = v.pos; }
-            continue;
-        }
-        if (active_ == nullptr) { v.active = false; continue; }
         renderVoice (v, left, right, numSamples, gain);
-        if (v.active)
-        {
-            ++count;
-            if (v.isLatest && v.zone != nullptr)
-                latestPlayhead = v.pos - (double) v.zone->sampleStart;
-        }
+        if (v.active) { ++count; if (v.isLatest) latest[v.slot] = v.pos; }
     }
     activeVoices_.store (count, std::memory_order_relaxed);
-    lastPlayhead_.store (latestPlayhead, std::memory_order_relaxed);
-    lastWavPlayhead_.store (latestWavPlayhead, std::memory_order_relaxed);
-}
-
-LastNoteInfo ScoutEngine::lastNote() const
-{
-    // F5 seqlock read side: retry while the sequence is odd (writer mid-flight)
-    // or changed between our first and last look (a write happened underneath
-    // us) -- either way the four fields we just read could be torn across two
-    // different note-ons. Bounded retries: never spin on the audio thread's
-    // behalf.
-    LastNoteInfo i;
-    for (int tries = 0; tries < kSeqlockRetries; ++tries)
-    {
-        const uint32_t s1 = lastSeq_.load (std::memory_order_acquire);
-        if (s1 & 1u) continue;                          // writer in progress
-        i.sequence    = s1;
-        i.presetIndex = lastPreset_.load (std::memory_order_relaxed);
-        i.note        = lastNoteNum_.load (std::memory_order_relaxed);
-        i.velocity    = lastVel_.load (std::memory_order_relaxed);
-        i.zoneIndex   = lastZone_.load (std::memory_order_relaxed);
-        const uint32_t s2 = lastSeq_.load (std::memory_order_acquire);
-        if (s1 == s2) return i;                         // consistent snapshot
-    }
-    return i;   // best effort after kSeqlockRetries: still a real, if stale, snapshot
+    for (int i = 0; i < kSlots; ++i) slots_[(size_t) i].lastPlayhead.store (latest[i], std::memory_order_relaxed);
 }
 
 } // namespace sf2scout

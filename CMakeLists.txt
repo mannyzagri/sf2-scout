@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # SF2 Scout -- vintage sample player / editor / converter (VST3 + Standalone).
 # Scope canon: docs/SCOUT_v2_SPEC.md. Naming contract: CLAUDE.md §"Naming
 # contract". PLUGIN_CODE and PRODUCT_NAME freeze at the first Cubase load.
-project(Sf2Scout VERSION 0.5.0 LANGUAGES C CXX)
+project(Sf2Scout VERSION 0.6.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -43,7 +43,8 @@ set(SCOUT_ENGINE_SOURCES
     Source/engine/SoundFontBank.cpp
     Source/engine/ScoutEngine.cpp
     Source/engine/WavSample.cpp
-    Source/engine/ModuleSource.cpp)
+    Source/engine/ModuleSource.cpp
+    Source/engine/Assists.cpp)
 
 # Engine harness (validator.json dsp stage). Still JUCE-free: it links only the
 # engine and openmpt_soundlib. Build: cmake --build build --config Release --target test_engine
@@ -84,6 +85,19 @@ juce_add_plugin(Sf2Scout
     VST3_CATEGORIES          Instrument Sampler
     COPY_PLUGIN_AFTER_BUILD  FALSE)
 
+# IBM Plex Sans / Mono (OFL 1.1, third_party/fonts/LICENSE.txt) -- bundled per
+# GUI handoff v2 (retires deviation D-2). Packed into BinaryData; ui/Fonts.h
+# registers them as typefaces at editor construction.
+juce_add_binary_data(Sf2ScoutFonts
+    NAMESPACE ScoutFonts
+    SOURCES
+        third_party/fonts/IBMPlexSans-Regular.ttf
+        third_party/fonts/IBMPlexSans-Medium.ttf
+        third_party/fonts/IBMPlexSans-SemiBold.ttf
+        third_party/fonts/IBMPlexMono-Regular.ttf
+        third_party/fonts/IBMPlexMono-Medium.ttf
+        third_party/fonts/IBMPlexMono-Bold.ttf)
+
 target_sources(Sf2Scout PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
@@ -112,6 +126,7 @@ target_link_libraries(Sf2Scout
     PRIVATE juce::juce_audio_utils
             juce::juce_gui_basics
             openmpt_soundlib
+            Sf2ScoutFonts
     PUBLIC  juce::juce_recommended_config_flags
             juce::juce_recommended_lto_flags
             juce::juce_recommended_warning_flags)

@@ -73,6 +73,46 @@ namespace
         return false;
     }
 
+    // LIST/INFO sub-chunks (INAM, IENG, ICOP, ICMT, ISFT, isng, IPRD, ICRD, ifil,
+    // iver...) as (id, text) pairs in file order. Bounds-checked; never fails --
+    // a SoundFont without an INFO list simply reports none.
+    void readInfo (const uint8_t* data, size_t size, std::vector<std::pair<std::string, std::string>>& out)
+    {
+        if (size < 12 || ! fourcc (data, "RIFF") || ! fourcc (data + 8, "sfbk")) return;
+        const size_t riffEnd = std::min (size, (size_t) 8 + rd32 (data + 4));
+        size_t pos = 12;
+        while (pos + 8 <= riffEnd)
+        {
+            const uint32_t csize = rd32 (data + pos + 4);
+            const size_t cbody = pos + 8, cend = cbody + csize;
+            if (cend > riffEnd) return;
+            if (fourcc (data + pos, "LIST") && csize >= 4 && fourcc (data + cbody, "INFO"))
+            {
+                size_t p = cbody + 4;
+                while (p + 8 <= cend)
+                {
+                    const uint32_t s = rd32 (data + p + 4);
+                    const size_t b = p + 8;
+                    if (b + s > cend) return;
+                    const std::string id ((const char*) data + p, 4);
+                    std::string text;
+                    if ((id == "ifil" || id == "iver") && s >= 4)
+                        text = std::to_string (rd16 (data + b)) + "." + std::to_string (rd16 (data + b + 2));
+                    else
+                    {
+                        size_t n = 0; while (n < s && data[b + n] != 0) ++n;
+                        text.assign ((const char*) data + b, n);
+                        while (! text.empty() && (text.back() == ' ' || text.back() == '\r' || text.back() == '\n')) text.pop_back();
+                    }
+                    if (! text.empty()) out.emplace_back (id, text);
+                    p = b + s + (s & 1);
+                }
+                return;
+            }
+            pos = cend + (csize & 1);
+        }
+    }
+
     // F1: SF2 generator values are attacker-controlled (a hostile/fuzzed file);
     // TSF does not clamp CoarseTune/ScaleTuning/FineTune (see genMetas rows 51,
     // 52, 56 in tsf.h -- no _GEN_LIMIT_MASK bits), so an unbounded value here can
@@ -139,6 +179,7 @@ std::unique_ptr<SoundFontBank> SoundFontBank::load (const void* data, size_t siz
     std::unique_ptr<SoundFontBank> bank (new SoundFontBank());
     bank->font_ = f;
     bank->samples_ = f->fontSamples;
+    readInfo ((const uint8_t*) data, size, bank->info_);
 
     // F7: sampleCount_ must be a real pool bound. shdr.end is file-supplied and
     // can lie (point past the actual smpl chunk); TSF's region.end cannot -- it
@@ -269,6 +310,12 @@ const Zone* SoundFontBank::zoneForKey (int presetIndex, int key, int vel) const
 
 namespace sf2scout
 {
+
+std::string SoundFontBank::infoValue (const char* key) const
+{
+    for (const auto& kv : info_) if (kv.first == key) return kv.second;
+    return {};
+}
 
 std::unique_ptr<WavSample> SoundFontBank::decodeZone (const Zone& z) const
 {

@@ -76,7 +76,40 @@ struct WavSaveSpec
 };
 
 // Serialises `w` + `spec` as a complete RIFF/WAVE image. Never fails on valid input.
+// This is the SAVE path: audio bytes stay identical (unless export16BitMono).
 std::vector<uint8_t> writeWav (const WavSample& w, const WavSaveSpec& spec);
+
+// EXPORT path (docs/SCOUT_v2_SPEC.md "Export / convert"): re-encodes the audio
+// from the decoded floats, so it can cut a RANGE, convert to 16-bit / 44.1 kHz
+// mono (windowed-sinc resampling + TPDF dither) and fold stereo (sum at -3 dB,
+// or the left channel only). NATIVE keeps the source rate and bit depth (8-bit
+// sources come out 16-bit, floats stay float). Loop markers travel with the
+// audio: remapped into the range, scaled by the resampling ratio; a loop that
+// falls outside the range is dropped (smpl keeps the root, no loop).
+struct ExportOptions
+{
+    bool     convert16Bit441Mono = false;
+    int      stereoFold = 0;                 // 0 sum (-3 dB), 1 left only -- used whenever the output is mono
+    bool     hasRange = false;
+    uint32_t rangeStart = 0, rangeEnd = 0;   // [start, end) frames of the source
+    std::string originator = "Scout v2";     // bext Originator (<= 32)
+    std::string originationDate;             // "yyyy-mm-dd" (bext, may be empty)
+    std::string originationTime;             // "hh:mm:ss"
+};
+
+struct ExportResult
+{
+    std::vector<uint8_t> bytes;
+    uint32_t frames = 0;
+    uint32_t sampleRate = 0;
+    int      channels = 1;
+    int      bits = 16;
+    bool     loopKept = false;               // false = markers fell outside the range (smpl written without a loop)
+    uint32_t loopStart = 0, loopEnd = 0;     // as written (inclusive end)
+    std::string error;                       // non-empty = nothing written (empty range, no audio)
+};
+
+ExportResult exportWav (const WavSample& w, const WavSaveSpec& spec, const ExportOptions& opt);
 
 // "<PREFIX>_<NOTE>.wav" -> MIDI note (C4 = 60, sharps '#', flats 'b', negative
 // octaves "C-1"), or -1 if the name carries no note suffix.

@@ -86,6 +86,11 @@ public:
     const std::vector<Preset>& presets() const { return presets_; }
     int presetCount() const { return (int) presets_.size(); }
 
+    // The file's LIST/INFO sub-chunks in file order (ifil rendered as "2.1"):
+    // INAM, IENG, ICOP, ICMT, ISFT, isng, IPRD, ICRD ... -- the METADATA box.
+    const std::vector<std::pair<std::string, std::string>>& info() const { return info_; }
+    std::string infoValue (const char* key) const;      // "" if absent
+
     const float* samples()     const { return samples_; }
     uint32_t     sampleCount() const { return sampleCount_; }
 
@@ -109,6 +114,7 @@ private:
     const float* samples_     = nullptr;
     uint32_t     sampleCount_ = 0;
     std::vector<Preset> presets_;
+    std::vector<std::pair<std::string, std::string>> info_;
     std::string  fileName_;
 };
 

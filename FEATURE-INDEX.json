@@ -1,307 +1,131 @@
 {
-  "_readme": "Feature -> file + symbol map. Check here before grepping; update on every move. Lines are approximate.",
-  "sf2 parsing (TSF wrapper, shdr walk, zone table)": {
+  "_readme": "Feature -> file + symbol map. Check here before grepping; update on every move. Lines are approximate. v2 (0.6.0): the engine plays decoded samples in three slots (A, B, Cur); every SF2 zone / module sample / WAV reaches it as a WavSample.",
+  "sf2 parsing (TSF wrapper, shdr walk, zone table, INFO list)": {
     "file": "Source/engine/SoundFontBank.cpp",
-    "symbols": [
-      "readShdr",
-      "shdrForRegion",
-      "SoundFontBank::load"
-    ]
+    "symbols": ["readShdr", "readInfo", "shdrForRegion", "SoundFontBank::load", "SoundFontBank::infoValue"]
   },
   "zone lookup for a key/velocity": {
     "file": "Source/engine/SoundFontBank.cpp",
-    "symbols": [
-      "SoundFontBank::findZones",
-      "SoundFontBank::zoneForKey"
-    ]
+    "symbols": ["SoundFontBank::findZones", "SoundFontBank::zoneForKey"]
   },
-  "voice pool / play modes / release fade / stealing": {
-    "file": "Source/engine/ScoutEngine.cpp",
-    "symbols": [
-      "ScoutEngine::startVoice",
-      "ScoutEngine::renderVoice",
-      "ScoutEngine::allocateVoice",
-      "ScoutEngine::noteOff"
-    ]
-  },
-  "pitch math (root, transpose, tune, keytrack, bend)": {
-    "file": "Source/engine/ScoutEngine.cpp",
-    "symbols": [
-      "ScoutEngine::startVoice"
-    ]
-  },
-  "lock-free bank swap": {
-    "file": "Source/engine/ScoutEngine.cpp",
-    "symbols": [
-      "ScoutEngine::setBank",
-      "ScoutEngine::consumePendingBank",
-      "ScoutEngine::takeRetiredBank"
-    ]
-  },
-  "readout publish (last note, playhead, voice count)": {
-    "file": "Source/engine/ScoutEngine.cpp",
-    "symbols": [
-      "ScoutEngine::noteOn",
-      "ScoutEngine::process",
-      "ScoutEngine::lastNote"
-    ]
-  },
-  "note names + ms formatting": {
-    "file": "Source/engine/NoteNames.h",
-    "symbols": [
-      "noteName",
-      "formatMs"
-    ]
-  },
-  "parameters (ids, layout)": {
-    "file": "Source/PluginProcessor.h",
-    "symbols": [
-      "ParamId",
-      "ScoutProcessor::createLayout"
-    ]
-  },
-  "MIDI handling / channel filter / UI audition fifo": {
-    "file": "Source/PluginProcessor.cpp",
-    "symbols": [
-      "ScoutProcessor::processBlock",
-      "ScoutProcessor::auditionNote"
-    ]
-  },
-  "file loading + state save/restore": {
-    "file": "Source/PluginProcessor.cpp",
-    "symbols": [
-      "ScoutProcessor::loadSoundFont",
-      "ScoutProcessor::getStateInformation",
-      "ScoutProcessor::setStateInformation"
-    ]
-  },
-  "design tokens (colours, fonts)": {
-    "file": "Source/ui/Palette.h",
-    "symbols": [
-      "col",
-      "sans",
-      "mono",
-      "smallLabel"
-    ]
-  },
-  "buttons, mode switch, slider/combo looks": {
-    "file": "Source/ui/Widgets.h",
-    "symbols": [
-      "FlatButton",
-      "SegmentSwitch",
-      "MasterSliderLook",
-      "ChipComboLook"
-    ]
-  },
-  "info readout + loop bar": {
-    "file": "Source/ui/Readout.h",
-    "symbols": [
-      "InfoReadout::paint",
-      "InfoReadout::paintBar"
-    ]
-  },
-  "zone map strip + labels": {
-    "file": "Source/ui/Readout.h",
-    "symbols": [
-      "ZoneMapStrip",
-      "ZoneLabelsRow"
-    ]
-  },
-  "editor layout / wiring / polling": {
-    "file": "Source/PluginEditor.cpp",
-    "symbols": [
-      "ScoutEditor::resized",
-      "ScoutEditor::paint",
-      "ScoutEditor::refreshReadout",
-      "ScoutEditor::timerCallback"
-    ]
-  },
-  "drag-drop + file chooser": {
-    "file": "Source/PluginEditor.cpp",
-    "symbols": [
-      "ScoutEditor::filesDropped",
-      "ScoutEditor::chooseFile"
-    ]
-  },
-  "wav load / smpl+bext parse / root from filename": {
-    "file": "Source/engine/WavSample.cpp",
-    "symbols": [
-      "WavSample::load",
-      "rootFromFileName",
-      "pitchFractionToCents"
-    ]
-  },
-  "wav save (smpl inclusive end, bext, 16-bit mono export) -- the ONLY writer": {
-    "file": "Source/engine/WavSample.cpp",
-    "symbols": [
-      "writeWav",
-      "centsToPitchFraction"
-    ]
-  },
-  "Slot W voice: fwd / ping-pong / off, attack+release fades": {
-    "file": "Source/engine/ScoutEngine.cpp",
-    "symbols": [
-      "ScoutEngine::startWavVoice",
-      "ScoutEngine::renderWavVoice",
-      "ScoutEngine::beginRelease"
-    ]
-  },
-  "Slot W handoff + live loop atomics + focus routing": {
-    "file": "Source/engine/ScoutEngine.cpp",
-    "symbols": [
-      "ScoutEngine::setWav",
-      "ScoutEngine::consumePendingWav",
-      "ScoutEngine::setWavLoop",
-      "ScoutEngine::setFocus",
-      "ScoutEngine::routesToWav"
-    ]
-  },
-  "Slot W state (WavEditState), load/save, persistence": {
-    "file": "Source/PluginProcessor.cpp",
-    "symbols": [
-      "ScoutProcessor::loadWav",
-      "ScoutProcessor::setWavState",
-      "ScoutProcessor::saveWav",
-      "ScoutProcessor::readWavStateFrom"
-    ]
-  },
-  "waveform editor, seam view, numeric field": {
-    "file": "Source/ui/WaveEditor.h",
-    "symbols": [
-      "WaveformView",
-      "SeamView",
-      "NumField",
-      "WaveformView::moveDragged",
-      "WaveformView::markerAt"
-    ]
-  },
-  "readout W column": {
-    "file": "Source/ui/Readout.h",
-    "symbols": [
-      "InfoReadout::paintWavColumn",
-      "ReadoutState::WavInfo"
-    ]
-  },
-  "Slot W editor wiring, keys, save flow": {
-    "file": "Source/PluginEditor.cpp",
-    "symbols": [
-      "ScoutEditor::keyPressed",
-      "ScoutEditor::rebuildForWav",
-      "ScoutEditor::syncWavControls",
-      "ScoutEditor::doSave",
-      "ScoutEditor::doSaveAs",
-      "ScoutEditor::filesDropped"
-    ]
-  },
-  "engine harness (in-memory SF2 + WAV writers)": {
-    "file": "tests/test_engine.cpp",
-    "symbols": [
-      "buildTestSf2",
-      "main",
-      "buildWav",
-      "findChunk"
-    ]
-  },
-  "loop marker hit-test / drag clamp math (JUCE-free)": {
-    "file": "Source/engine/LoopMarkers.h",
-    "symbols": [
-      "pickMarker",
-      "applyMarkerDrag"
-    ]
-  },
-  "PLAY C3 latch (forced Slot W note via the UI fifo)": {
-    "file": "Source/PluginProcessor.cpp",
-    "symbols": [
-      "ScoutProcessor::auditionWav",
-      "ScoutEngine::noteOnWav"
-    ]
-  },
-  "standalone MIDI input device selector": {
-    "file": "Source/PluginEditor.cpp",
-    "symbols": [
-      "ScoutEditor::refreshMidiDevices",
-      "ScoutEditor::applyMidiDevice"
-    ]
-  },
-  "UNLOAD: per-slot clear (engine + processor + editor)": {
-    "file": "Source/engine/ScoutEngine.cpp",
-    "symbols": [
-      "ScoutEngine::clearBank",
-      "ScoutEngine::clearWav",
-      "ScoutProcessor::unloadSoundFont",
-      "ScoutProcessor::unloadWav",
-      "ScoutEditor::unloadWav"
-    ]
-  },
-  "KEYBOARD PLAYS control, empty-slot fallback + normalisation": {
-    "file": "Source/PluginEditor.cpp",
-    "symbols": [
-      "ScoutEditor::updateFocusEnables",
-      "ScoutProcessor::normaliseFocus",
-      "ScoutEngine::routesToWav"
-    ]
-  },
-  "tracker module parsing (libopenmpt soundlib wrapper): sample table, metadata, extension routing": {
-    "file": "Source/engine/ModuleSource.cpp",
-    "symbols": [
-      "ModuleSource::load",
-      "ModuleSource::isSupportedExtension",
-      "ModuleSource::supportedExtensions",
-      "OpenMPT::AssertHandler"
-    ]
-  },
-  "module sample -> WavSample decode (8/16-bit, loop or sustain loop, C-5 rate tuning, provenance)": {
-    "file": "Source/engine/ModuleSource.cpp",
-    "symbols": [
-      "ModuleSource::decode"
-    ]
-  },
-  "PCM -> WavSample bridge (fmt+data synthesis for the exporter)": {
-    "file": "Source/engine/WavSample.cpp",
-    "symbols": [
-      "WavSample::fromPcm16"
-    ]
-  },
-  "SF2 zone -> WavSample decode (export path)": {
+  "SF2 zone -> WavSample bridge (decode, loop, root, provenance)": {
     "file": "Source/engine/SoundFontBank.cpp",
-    "symbols": [
-      "SoundFontBank::decodeZone"
-    ]
+    "symbols": ["SoundFontBank::decodeZone"]
   },
-  "module / zone into Slot W (processor): load, select sample, send zone, shared install, state": {
+  "tracker module container (libopenmpt soundlib): parse, sample table, decode": {
+    "file": "Source/engine/ModuleSource.cpp",
+    "symbols": ["ModuleSource::load", "ModuleSource::decode", "ModuleSource::isSupportedExtension", "AssertHandler"]
+  },
+  "WAV parse (fmt/data/smpl/bext, PCM 8-32 + float), root from file name": {
+    "file": "Source/engine/WavSample.cpp",
+    "symbols": ["WavSample::load", "rootFromFileName", "centsToPitchFraction", "WavSample::fromPcm16"]
+  },
+  "SAVE writer (byte-identical audio + smpl/bext)": {
+    "file": "Source/engine/WavSample.cpp",
+    "symbols": ["writeWav", "appendSmplBext", "finishRiff"]
+  },
+  "EXPORT writer: range, 16-bit/44.1 mono conversion (sinc + TPDF), stereo fold, marker remap": {
+    "file": "Source/engine/WavSample.cpp",
+    "symbols": ["exportWav", "resample", "ExportOptions", "ExportResult"]
+  },
+  "voice pool: three slots, keyboard routing A/B/SPLIT/TOGGLE, slot handoff/retire, loops, fades": {
+    "file": "Source/engine/ScoutEngine.cpp",
+    "symbols": ["ScoutEngine::setSlot", "ScoutEngine::clearSlot", "ScoutEngine::consumePending", "ScoutEngine::routeSlot", "ScoutEngine::noteOn", "ScoutEngine::noteOnSlot", "ScoutEngine::startVoice", "ScoutEngine::renderVoice", "ScoutEngine::process", "ScoutEngine::forgetAll"]
+  },
+  "assists: LOUDNESS, PERIODS, CLICK METER, SUGGEST (splice search + FFT), AUTO-DETECT ROOT (autocorrelation)": {
+    "file": "Source/engine/Assists.cpp",
+    "symbols": ["loopRmsDb", "loopPeriods", "clickRatio", "suggestSplice", "autoDetectRoot", "fft", "spectrum"]
+  },
+  "loop-marker hit-test and drag math": {
+    "file": "Source/engine/LoopMarkers.h",
+    "symbols": ["pickMarker", "applyMarkerDrag"]
+  },
+  "note names / ms formatting": {
+    "file": "Source/engine/NoteNames.h",
+    "symbols": ["noteName", "formatMs", "samplesToMs"]
+  },
+  "sources model: open/unload, selection, contents rows, sample keys": {
     "file": "Source/PluginProcessor.cpp",
-    "symbols": [
-      "ScoutProcessor::loadModule",
-      "ScoutProcessor::selectModuleSample",
-      "ScoutProcessor::sendZoneToWav",
-      "ScoutProcessor::installWav",
-      "ScoutProcessor::wavIsDecoded"
-    ]
+    "symbols": ["ScoutProcessor::openSource", "ScoutProcessor::unloadSource", "ScoutProcessor::selectSource", "ScoutProcessor::selectPreset", "ScoutProcessor::selectSample", "ScoutProcessor::contents", "ScoutProcessor::stepSample", "SampleKey"]
   },
-  "module UI: extension routing, sample chooser popup, , . stepping, -> W button": {
+  "per-sample session edits + engine slot install/keep-alive": {
+    "file": "Source/PluginProcessor.cpp",
+    "symbols": ["ScoutProcessor::decoded", "ScoutProcessor::defaultEdits", "ScoutProcessor::setEdits", "ScoutProcessor::installSlot", "ScoutProcessor::releaseHeld", "ScoutProcessor::collectRetired"]
+  },
+  "A/B slots, keyboard mode, split, toggle, latch (PLAY/SPACE), QWERTY routing": {
+    "file": "Source/PluginProcessor.cpp",
+    "symbols": ["ScoutProcessor::assignSlot", "ScoutProcessor::setKbMode", "ScoutProcessor::swapToggle", "ScoutProcessor::slotLive", "ScoutProcessor::setLatched", "ScoutProcessor::auditionSlot", "ScoutProcessor::auditionKeyboard"]
+  },
+  "save / save as / export sample / export range / batch / naming / folders": {
+    "file": "Source/PluginProcessor.cpp",
+    "symbols": ["ScoutProcessor::saveWav", "ScoutProcessor::saveAs", "ScoutProcessor::exportSample", "ScoutProcessor::exportRange", "ScoutProcessor::startBatch", "ScoutProcessor::batchTick", "ScoutProcessor::exportFileName", "ScoutProcessor::saveSpecFor", "ScoutProcessor::exportOptionsFor"]
+  },
+  "metadata box rows (SF2 INFO / MODULE INFO / WAV CHUNKS)": {
+    "file": "Source/PluginProcessor.cpp",
+    "symbols": ["ScoutProcessor::metadata"]
+  },
+  "session state save/restore (sources by path, edits by key, slots, export settings)": {
+    "file": "Source/PluginProcessor.cpp",
+    "symbols": ["ScoutProcessor::getStateInformation", "ScoutProcessor::setStateInformation", "ScoutProcessor::performPendingRestore"]
+  },
+  "MIDI -> engine, UI audition FIFO, channel filter": {
+    "file": "Source/PluginProcessor.cpp",
+    "symbols": ["ScoutProcessor::processBlock"]
+  },
+  "parameters (masterGain, mode, midiChannel) -- public API": {
+    "file": "Source/PluginProcessor.h",
+    "symbols": ["ParamId", "ScoutProcessor::createLayout"]
+  },
+  "face assembly at the handoff bounds, window scaling, timer polling": {
     "file": "Source/PluginEditor.cpp",
-    "symbols": [
-      "ScoutEditor::isModuleName",
-      "ScoutEditor::loadModuleFile",
-      "ScoutEditor::showSamplePopup",
-      "ScoutEditor::stepModuleSample",
-      "ScoutEditor::sendZoneToWav",
-      "ScoutEditor::mouseDown"
-    ]
+    "symbols": ["ScoutEditor::ScoutEditor", "ScoutEditor::resized", "ScoutEditor::paintFace", "ScoutEditor::timerCallback", "ScoutEditor::rebuildAll"]
   },
-  "harness: MOD builder, mod-load / mod-play sections, --probe real-file diagnostic": {
+  "face: header / lists / readouts / zone map / editor / export rebuilds": {
+    "file": "Source/PluginEditor.cpp",
+    "symbols": ["ScoutEditor::rebuildHeader", "ScoutEditor::rebuildLists", "ScoutEditor::rebuildReadouts", "ScoutEditor::rebuildZoneMap", "ScoutEditor::rebuildEditor", "ScoutEditor::rebuildExport", "ScoutEditor::refreshAssists"]
+  },
+  "face actions: load/unload, assign, save/save as, suggest, auto-root, export, batch, zone click": {
+    "file": "Source/PluginEditor.cpp",
+    "symbols": ["ScoutEditor::chooseSource", "ScoutEditor::unloadSelected", "ScoutEditor::assign", "ScoutEditor::doSave", "ScoutEditor::doSaveAs", "ScoutEditor::doSuggest", "ScoutEditor::doAutoRoot", "ScoutEditor::exportSample", "ScoutEditor::exportRange", "ScoutEditor::batchToggle", "ScoutEditor::zoneKey"]
+  },
+  "hotkeys (F/P/O, nudges, , . TAB SPACE L Ctrl+S) + QWERTY piano": {
+    "file": "Source/PluginEditor.cpp",
+    "symbols": ["ScoutEditor::keyPressed", "ScoutEditor::keyStateChanged"]
+  },
+  "standalone MIDI input device chip": {
+    "file": "Source/PluginEditor.cpp",
+    "symbols": ["ScoutEditor::refreshMidiDevices", "ScoutEditor::applyMidiDevice"]
+  },
+  "design tokens + type scale (Plex)": {
+    "file": "Source/ui/Palette.h",
+    "symbols": ["col", "smallLabel", "buttonFont", "mono", "sans"]
+  },
+  "bundled IBM Plex typefaces (BinaryData)": {
+    "file": "Source/ui/Fonts.h",
+    "symbols": ["fonts::set", "fonts::sans", "fonts::mono"]
+  },
+  "styled widgets: buttons, segmented, checkbox, badge, fields, click meter, progress, chip/slider looks": {
+    "file": "Source/ui/Widgets.h",
+    "symbols": ["FlatButton", "SegmentSwitch", "Checkbox", "drawBadge", "NumField", "ReadonlyField", "ClickMeter", "ProgressBarView", "ChipComboLook", "MasterSliderLook"]
+  },
+  "SOURCE LIST tree + CONTENTS table": {
+    "file": "Source/ui/Lists.h",
+    "symbols": ["SourceListView", "ContentsListView", "TreeRow", "ListRow"]
+  },
+  "readout columns A | B, zone map strip, zone labels": {
+    "file": "Source/ui/Readout.h",
+    "symbols": ["ReadoutColumn", "ReadoutData", "ZoneMapStrip", "ZoneLabelsRow"]
+  },
+  "waveform editor (zoom, markers, snap on release) + seam view": {
+    "file": "Source/ui/WaveEditor.h",
+    "symbols": ["WaveformView", "WaveformView::snapRising", "SeamView"]
+  },
+  "EXPORT column (folder, quick targets, options, sample/range/batch, metadata box)": {
+    "file": "Source/ui/ExportColumn.h",
+    "symbols": ["ExportColumn", "ExportColumn::Info", "MetaBox"]
+  },
+  "harness (JUCE-free, in-memory SF2 / WAV / MOD fixtures)": {
     "file": "tests/test_engine.cpp",
-    "symbols": [
-      "buildMod",
-      "probeModule"
-    ]
-  },
-  "vendored libopenmpt static lib (CMake)": {
-    "file": "CMakeLists.txt",
-    "symbols": [
-      "openmpt_soundlib",
-      "SCOUT_ENGINE_SOURCES",
-      "test_engine"
-    ]
+    "symbols": ["buildSf2", "buildWav", "buildMod", "install", "render", "main"]
   }
 }

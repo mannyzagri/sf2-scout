@@ -46,6 +46,56 @@ float decodeSample (const uint8_t* s, int bits, int formatTag)
         default: return 0.0f;
     }
 }
+
+// smpl (root, fine tune, optional single loop with INCLUSIVE end, infinite play
+// count) + bext (BWF v1: Description, Originator, date/time) appended to `body`.
+void appendSmplBext (Writer& body, uint32_t sampleRate, const WavSaveSpec& spec, bool withLoop, uint32_t ls, uint32_t le,
+                     const std::string& originator, const std::string& date, const std::string& time)
+{
+    int root = std::max (0, std::min (127, spec.rootKey));
+    double cents = spec.fineCents;
+    if (! std::isfinite (cents)) cents = 0.0;
+    if (cents < 0.0)    { root = std::max (0, root - 1); cents += 100.0; }
+    if (cents >= 100.0) { root = std::min (127, root + 1); cents -= 100.0; }
+    Writer smpl;
+    smpl.u32 (0); smpl.u32 (0);                                             // manufacturer, product
+    smpl.u32 (sampleRate > 0 ? (uint32_t) (1000000000.0 / sampleRate + 0.5) : 0);   // samplePeriod ns
+    smpl.u32 ((uint32_t) root);
+    smpl.u32 (centsToPitchFraction (cents));
+    smpl.u32 (0); smpl.u32 (0);                                             // SMPTE format/offset
+    smpl.u32 (withLoop ? 1u : 0u); smpl.u32 (0);                            // numLoops, samplerData
+    if (withLoop)
+    {
+        smpl.u32 (0);                                                       // cuePointId
+        smpl.u32 ((uint32_t) (spec.loopType == 1 ? 1 : 0));                 // type: 0 fwd, 1 alternating
+        smpl.u32 (ls); smpl.u32 (le);                                       // start, end (INCLUSIVE)
+        smpl.u32 (0); smpl.u32 (0);                                         // fraction, playCount (0 = infinite)
+    }
+    body.chunk ("smpl", smpl.b);
+
+    Writer bext;
+    bext.fixed (spec.description, 256);
+    bext.fixed (originator, 32);
+    bext.fixed ("", 32);                      // OriginatorReference
+    bext.fixed (date, 10);                    // OriginationDate yyyy-mm-dd
+    bext.fixed (time, 8);                     // OriginationTime hh:mm:ss
+    bext.u32 (0); bext.u32 (0);               // TimeReference
+    bext.u16 (1);                             // Version
+    for (int i = 0; i < 64; ++i) bext.u8 (0); // UMID
+    for (int i = 0; i < 10; ++i) bext.u8 (0); // loudness
+    for (int i = 0; i < 180; ++i) bext.u8 (0);// reserved
+    body.chunk ("bext", bext.b);
+}
+
+std::vector<uint8_t> finishRiff (const Writer& body)
+{
+    Writer file;
+    file.fcc ("RIFF");
+    file.u32 ((uint32_t) (4 + body.b.size()));
+    file.fcc ("WAVE");
+    file.b.insert (file.b.end(), body.b.begin(), body.b.end());
+    return file.b;
+}
 } // namespace
 
 uint32_t centsToPitchFraction (double cents)
@@ -251,47 +301,152 @@ std::vector<uint8_t> writeWav (const WavSample& w, const WavSaveSpec& spec)
             body.chunk (std::string (c.id, 4).c_str(), c.body);   // byte-identical, original order
     }
 
-    // smpl: one loop, inclusive end, infinite play count
-    int root = std::max (0, std::min (127, spec.rootKey));
-    double cents = spec.fineCents;
-    if (cents < 0.0)  { root = std::max (0, root - 1); cents += 100.0; }
-    if (cents >= 100.0) { root = std::min (127, root + 1); cents -= 100.0; }
     const uint32_t lastFrame = w.frames > 0 ? w.frames - 1 : 0;
     const uint32_t ls = std::min (spec.loopStart, lastFrame);
     const uint32_t le = std::max (ls, std::min (spec.loopEnd, lastFrame));
-    Writer smpl;
-    smpl.u32 (0); smpl.u32 (0);                                             // manufacturer, product
-    smpl.u32 (w.sampleRate > 0 ? (uint32_t) (1000000000.0 / w.sampleRate + 0.5) : 0);   // samplePeriod ns
-    smpl.u32 ((uint32_t) root);
-    smpl.u32 (centsToPitchFraction (cents));
-    smpl.u32 (0); smpl.u32 (0);                                             // SMPTE format/offset
-    smpl.u32 (1); smpl.u32 (0);                                             // numLoops, samplerData
-    smpl.u32 (0);                                                           // cuePointId
-    smpl.u32 ((uint32_t) (spec.loopType == 1 ? 1 : 0));                     // type: 0 fwd, 1 alternating
-    smpl.u32 (ls); smpl.u32 (le);                                           // start, end (INCLUSIVE)
-    smpl.u32 (0); smpl.u32 (0);                                             // fraction, playCount (0 = infinite)
-    body.chunk ("smpl", smpl.b);
+    appendSmplBext (body, w.sampleRate, spec, true, ls, le, "Scout v2", "", "");
+    return finishRiff (body);
+}
 
-    // bext (BWF v1): Description, Originator "SF2 Scout", date/time blank-safe, rest zero
-    Writer bext;
-    bext.fixed (spec.description, 256);
-    bext.fixed ("SF2 Scout", 32);
-    bext.fixed ("", 32);                      // OriginatorReference
-    bext.fixed ("", 10);                      // OriginationDate (filled by the caller through description if wanted)
-    bext.fixed ("", 8);                       // OriginationTime
-    bext.u32 (0); bext.u32 (0);               // TimeReference
-    bext.u16 (1);                             // Version
-    for (int i = 0; i < 64; ++i) bext.u8 (0); // UMID
-    for (int i = 0; i < 10; ++i) bext.u8 (0); // loudness
-    for (int i = 0; i < 180; ++i) bext.u8 (0);// reserved
-    body.chunk ("bext", bext.b);
+namespace
+{
+    // windowed-sinc resampler (Lanczos-style, 16 taps each side scaled by the cutoff)
+    std::vector<float> resample (const std::vector<float>& in, double ratio)
+    {
+        if (in.empty() || ! (ratio > 0.0)) return {};
+        const size_t outN = (size_t) std::max<int64_t> (1, (int64_t) std::llround ((double) in.size() * ratio));
+        const double cutoff = std::min (1.0, ratio);          // downsampling: lowpass at the new Nyquist
+        const int a = 16;
+        const double halfWidth = (double) a / cutoff;
+        std::vector<float> out (outN);
+        const double pi = 3.14159265358979323846;
+        for (size_t n = 0; n < outN; ++n)
+        {
+            const double centre = (double) n / ratio;
+            const int64_t k0 = (int64_t) std::floor (centre - halfWidth), k1 = (int64_t) std::ceil (centre + halfWidth);
+            double acc = 0.0, wsum = 0.0;
+            for (int64_t k = k0; k <= k1; ++k)
+            {
+                const double t = (centre - (double) k) * cutoff;
+                double wgt;
+                if (std::fabs (t) < 1e-9) wgt = 1.0;
+                else if (std::fabs (t) >= (double) a) continue;
+                else wgt = (std::sin (pi * t) / (pi * t)) * (std::sin (pi * t / a) / (pi * t / a));
+                wsum += wgt;
+                if (k >= 0 && k < (int64_t) in.size()) acc += wgt * (double) in[(size_t) k];
+            }
+            out[n] = (float) (wsum > 0.0 ? acc * cutoff / (wsum * cutoff) : 0.0);
+        }
+        return out;
+    }
+}
 
-    Writer file;
-    file.fcc ("RIFF");
-    file.u32 ((uint32_t) (4 + body.b.size()));
-    file.fcc ("WAVE");
-    file.b.insert (file.b.end(), body.b.begin(), body.b.end());
-    return file.b;
+ExportResult exportWav (const WavSample& w, const WavSaveSpec& spec, const ExportOptions& opt)
+{
+    ExportResult r;
+    if (w.frames == 0) { r.error = "no audio data"; return r; }
+    // 1. the frame range
+    uint32_t r0 = 0, r1 = w.frames;
+    if (opt.hasRange)
+    {
+        r0 = std::min (opt.rangeStart, w.frames);
+        r1 = std::min (opt.rangeEnd, w.frames);
+        if (r1 <= r0) { r.error = "range end must exceed start"; return r; }
+    }
+    const uint32_t n = r1 - r0;
+    // 2. the audio, as floats, folded to mono when the output is mono
+    const bool mono = opt.convert16Bit441Mono || w.isStereo();
+    std::vector<float> L (n), R;
+    if (mono)
+    {
+        if (w.isStereo())
+        {
+            if (opt.stereoFold == 1) for (uint32_t i = 0; i < n; ++i) L[i] = w.left[r0 + i];
+            else                     for (uint32_t i = 0; i < n; ++i) L[i] = (w.left[r0 + i] + w.right[r0 + i]) * 0.70710678f;
+        }
+        else for (uint32_t i = 0; i < n; ++i) L[i] = w.left[r0 + i];
+    }
+    else
+    {
+        for (uint32_t i = 0; i < n; ++i) L[i] = w.left[r0 + i];
+        if (w.isStereo()) { R.resize (n); for (uint32_t i = 0; i < n; ++i) R[i] = w.right[r0 + i]; }
+    }
+    // 3. markers relative to the range
+    const uint32_t lastIn = n - 1;
+    bool loopKept = spec.loopStart >= r0 && spec.loopEnd >= spec.loopStart && spec.loopEnd < r1;
+    uint32_t ls = loopKept ? spec.loopStart - r0 : 0;
+    uint32_t le = loopKept ? spec.loopEnd - r0 : lastIn;
+    // 4. format
+    uint32_t outRate = w.sampleRate;
+    int outBits = w.bitsPerSample < 16 ? 16 : w.bitsPerSample;
+    int outTag  = w.formatTag == 3 ? 3 : 1;
+    if (opt.convert16Bit441Mono)
+    {
+        outRate = 44100; outBits = 16; outTag = 1;
+        if (w.sampleRate != 44100)
+        {
+            const double ratio = 44100.0 / (double) w.sampleRate;
+            L = resample (L, ratio);
+            if (loopKept)
+            {
+                ls = (uint32_t) std::llround ((double) ls * ratio);
+                le = (uint32_t) std::max<int64_t> ((int64_t) ls, std::llround ((double) (le + 1) * ratio) - 1);
+            }
+        }
+    }
+    const uint32_t outFrames = (uint32_t) L.size();
+    if (outFrames == 0) { r.error = "no audio data"; return r; }
+    if (loopKept) { ls = std::min (ls, outFrames - 1); le = std::min (le, outFrames - 1); }
+    const int channels = R.empty() ? 1 : 2;
+    // 5. encode
+    Writer body;
+    Writer fmt;
+    const int bytesPer = outBits / 8;
+    fmt.u16 ((uint16_t) outTag); fmt.u16 ((uint16_t) channels); fmt.u32 (outRate);
+    fmt.u32 (outRate * (uint32_t) (bytesPer * channels)); fmt.u16 ((uint16_t) (bytesPer * channels)); fmt.u16 ((uint16_t) outBits);
+    body.chunk ("fmt ", fmt.b);
+    Writer pcm;
+    pcm.b.reserve ((size_t) outFrames * (size_t) bytesPer * (size_t) channels);
+    uint32_t rng = 0x9E3779B9u;                                  // TPDF dither: deterministic, two uniform draws per sample
+    auto dither = [&rng] () -> double
+    {
+        rng = rng * 1664525u + 1013904223u; const double a = (double) (rng >> 8) / 16777216.0;
+        rng = rng * 1664525u + 1013904223u; const double b = (double) (rng >> 8) / 16777216.0;
+        return a - b;                                            // triangular in [-1, 1) LSB
+    };
+    auto put = [&] (float v)
+    {
+        if (outTag == 3 && outBits == 32) { uint32_t u; std::memcpy (&u, &v, 4); pcm.u32 (u); return; }
+        if (outTag == 3 && outBits == 64) { const double d = v; uint64_t u; std::memcpy (&u, &d, 8); pcm.u32 ((uint32_t) u); pcm.u32 ((uint32_t) (u >> 32)); return; }
+        const double x = std::max (-1.0, std::min (1.0, (double) v));
+        if (outBits == 16)
+        {
+            const double scaled = x * 32767.0 + (opt.convert16Bit441Mono ? dither() : 0.0);
+            const int q = (int) std::max (-32768.0, std::min (32767.0, std::round (scaled)));
+            pcm.u16 ((uint16_t) (int16_t) q);
+        }
+        else if (outBits == 24)
+        {
+            const int32_t q = (int32_t) std::max (-8388608.0, std::min (8388607.0, std::round (x * 8388607.0)));
+            pcm.u8 ((uint8_t) q); pcm.u8 ((uint8_t) (q >> 8)); pcm.u8 ((uint8_t) (q >> 16));
+        }
+        else
+        {
+            const int64_t q = (int64_t) std::max (-2147483648.0, std::min (2147483647.0, std::round (x * 2147483647.0)));
+            pcm.u32 ((uint32_t) (int32_t) q);
+        }
+    };
+    for (uint32_t i = 0; i < outFrames; ++i)
+    {
+        put (L[i]);
+        if (channels == 2) put (R[i]);
+    }
+    body.chunk ("data", pcm.b);
+    appendSmplBext (body, outRate, spec, loopKept, ls, le, opt.originator, opt.originationDate, opt.originationTime);
+    r.bytes = finishRiff (body);
+    r.frames = outFrames; r.sampleRate = outRate; r.channels = channels; r.bits = outBits;
+    r.loopKept = loopKept; r.loopStart = ls; r.loopEnd = le;
+    return r;
 }
 
 } // namespace sf2scout

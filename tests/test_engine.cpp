@@ -1,24 +1,31 @@
-// test_engine -- JUCE-free harness for SoundFontBank + ScoutEngine.
+// test_engine -- JUCE-free harness for SoundFontBank + ModuleSource + WavSample + ScoutEngine + Assists.
 //
 // Builds a tiny but structurally complete SF2 in memory (two samples: a
 // looped sine "Loop_C4" on keys 0-71 and a one-shot ramp "Shot_C5" on 72-127),
-// then checks the spec's acceptance items that a harness can check:
-//   [load]      parse, preset list, zone join to sample names, loop points
-//   [authored]  AS-AUTHORED starts at sample 0, loops indefinitely, no-loop
-//               zone plays through once and frees its voice
-//   [looponly]  LOOP-ONLY starts AT loopStart; unlooped zone loops whole sample
-//   [pitch]     root key plays at native pitch; +12 st doubles the rate
-//   [release]   note-off fades to silence within ~80 ms and frees the voice
-//   [malformed] garbage / truncated input -> error string, no crash
-//   [swap]      bank swap retires the old bank exactly once
-//   [wav-*]     Slot W: WAV parse (smpl/root fallback), unity pitch at root,
-//               forward wrap continuity, ping-pong reversal at both markers,
-//               one-shot end, release keeps cycling, focus/split routing,
-//               smpl round-trip (write -> read identical, data byte-identical)
-//   [mod-load]  ModuleSource: MOD parse, sample table, loop flags, C-5 rate, decode ->
-//               WavSample bridge (inclusive loop end, root 60), export round-trip,
-//               extension routing, malformed/truncated input
-//   [mod-play]  a decoded module sample sounds in Slot W at its C-5 rate and loops
+// a WAV writer and a ProTracker MOD, then checks the spec's acceptance items a
+// harness can check. v2 model (0.6.0): the engine plays decoded samples in
+// three slots (A, B, Cur) -- every SF2 zone reaches it through decodeZone.
+//   [load]        parse, preset list, zone join to sample names, loop points, INFO list
+//   [authored]    AS-AUTHORED starts at frame 0; one-shot plays through once and frees
+//   [looponly]    LOOP-ONLY starts AT loopStart; an "off" loop loops its marked region
+//   [pitch]       root key plays at native pitch; +12 st doubles the rate; 96 kHz host; bend
+//   [release]     note-off fades to silence within the RELEASE time; 16-voice pool, oldest-steal
+//   [malformed]   garbage / truncated input -> error string, no crash
+//   [swap]        slot swap retires the old sample exactly once, kills only that slot's voices
+//   [hostile-pitch] clamps at the bank (generators) and the engine (step)
+//   [last-note]   per-slot last note / velocity / counter publication
+//   [sample-id] [stereo-pair] [pool-bound]  zone join, stereo halves decode, lying shdr.end
+//   [wav-*]       WAV parse (smpl/root fallback), unity pitch at root, forward wrap continuity,
+//                 ping-pong reversal at both markers, one-shot end, release keeps cycling
+//   [routing]     KEYBOARD PLAYS A / B / SPLIT / TOGGLE
+//   [wav-smpl]    smpl round-trip (write -> read identical, data byte-identical)
+//   [export]      EXPORT RANGE exact length + marker remap/drop; 16-bit/44.1 mono conversion; stereo fold
+//   [markers]     hit-test / drag math; direct slot audition
+//   [routing-fallback] empty targets fall back to the loaded slot
+//   [unload]      clearSlot: only that slot's voices die, retiree collected once
+//   [assists]     LOUDNESS, PERIODS, CLICK METER, SUGGEST, AUTO-DETECT ROOT
+//   [mod-load]    ModuleSource: MOD parse, sample table, loop flags, C-5 rate, decode -> WavSample bridge
+//   [mod-play]    a decoded module sample sounds at its C-5 rate and loops
 // Compile (validator.json dsp stage):
 //   cmake --build build --config Release --target test_engine   (links openmpt_soundlib)
 #include "../Source/engine/SoundFontBank.h"
@@ -27,6 +34,7 @@
 #include "../Source/engine/ModuleSource.h"
 #include "../Source/engine/LoopMarkers.h"
 #include "../Source/engine/NoteNames.h"
+#include "../Source/engine/Assists.h"
 
 #include <cstdio>
 #include <cstring>
@@ -82,13 +90,6 @@ enum {
     GEN_SCALETUNING = 56, GEN_ROOTKEY = 58
 };
 
-// One instrument-zone generator: {opcode, raw 2-byte amount}. A GEN_KEYRANGE/
-// GEN_VELRANGE amount packs lo in the low byte and hi in the high byte (SF2's
-// own range encoding); every other opcode's amount is just its int16/uint16
-// bit pattern, so a single uint16_t representation covers all of them and a
-// zone becomes DATA -- a vector of these -- instead of hand-counted byte
-// offsets into igen/ibag (the old writer's index arithmetic F6/F7/F11's tests
-// would otherwise have made unreadable).
 struct GenOp { uint16_t oper; uint16_t amount; };
 using ZoneDesc = std::vector<GenOp>;
 GenOp keyRangeOp (int lo, int hi) { return { (uint16_t) GEN_KEYRANGE, (uint16_t) ((uint8_t) lo | ((unsigned) (uint8_t) hi << 8)) }; }
@@ -96,11 +97,9 @@ GenOp velRangeOp (int lo, int hi) { return { (uint16_t) GEN_VELRANGE, (uint16_t)
 GenOp genOp (uint16_t oper, int32_t value) { return { oper, (uint16_t) (int16_t) value }; }
 
 // General SF2 writer: any sample set, any zone list (all zones in ONE
-// instrument, ONE preset "bank 0 program 0"). Adding a zone or a generator to
-// a test is now a data literal, not new index arithmetic.
+// instrument, ONE preset "bank 0 program 0"), plus an INFO list.
 std::vector<uint8_t> buildSf2 (std::vector<Sample>& samples, const std::vector<ZoneDesc>& zones, const char* presetName = "Scout Test")
 {
-    // --- sdta: concatenated PCM with 46 zero guard samples after each
     Buf smpl; std::vector<uint32_t> starts, ends;
     for (auto& s : samples)
     {
@@ -111,18 +110,15 @@ std::vector<uint8_t> buildSf2 (std::vector<Sample>& samples, const std::vector<Z
     }
     Buf sdtaBody; sdtaBody.chunk ("smpl", smpl);
 
-    // --- pdta
     Buf phdr, pbag, pmod, pgen, inst, ibag, imod, igen, shdr;
-    // one preset, bank 0 program 0, one pbag pointing to instrument 0
     phdr.name20 (presetName); phdr.u16 (0); phdr.u16 (0); phdr.u16 (0); phdr.u32 (0); phdr.u32 (0); phdr.u32 (0);
     phdr.name20 ("EOP");      phdr.u16 (0); phdr.u16 (0); phdr.u16 (1); phdr.u32 (0); phdr.u32 (0); phdr.u32 (0);
-    pbag.u16 (0); pbag.u16 (0);   // bag 0: gens start 0
-    pbag.u16 (1); pbag.u16 (0);   // terminal
+    pbag.u16 (0); pbag.u16 (0);
+    pbag.u16 (1); pbag.u16 (0);
     pgen.u16 (GEN_INSTRUMENT); pgen.u16 (0);
-    pgen.u16 (0); pgen.u16 (0);   // terminal
-    pmod.u16 (0); pmod.u16 (0); pmod.i16 (0); pmod.u16 (0); pmod.u16 (0); // terminal only
+    pgen.u16 (0); pgen.u16 (0);
+    pmod.u16 (0); pmod.u16 (0); pmod.i16 (0); pmod.u16 (0); pmod.u16 (0);
 
-    // one instrument, N zones (data-driven -- see ZoneDesc above)
     inst.name20 ("ScoutInst"); inst.u16 (0);
     inst.name20 ("EOI");       inst.u16 ((uint16_t) zones.size());
     uint16_t genIdx = 0;
@@ -132,15 +128,13 @@ std::vector<uint8_t> buildSf2 (std::vector<Sample>& samples, const std::vector<Z
         for (auto& g : z) { igen.u16 (g.oper); igen.u16 (g.amount); }
         genIdx = (uint16_t) (genIdx + z.size());
     }
-    ibag.u16 (genIdx); ibag.u16 (0);   // terminal
-    igen.u16 (0); igen.u16 (0);        // terminal
+    ibag.u16 (genIdx); ibag.u16 (0);
+    igen.u16 (0); igen.u16 (0);
     imod.u16 (0); imod.u16 (0); imod.i16 (0); imod.u16 (0); imod.u16 (0);
 
     for (size_t i = 0; i < samples.size(); ++i)
     {
         auto& s = samples[i];
-        // F7: endOverride lets a test write a shdr.end that lies past the real
-        // PCM this sample owns, to prove TSF's clamp (and ours) hold anyway.
         const uint32_t rawEnd = s.endOverride >= 0 ? (starts[i] + (uint32_t) s.endOverride) : ends[i];
         shdr.name20 (s.name);
         shdr.u32 (starts[i]); shdr.u32 (rawEnd);
@@ -154,10 +148,10 @@ std::vector<uint8_t> buildSf2 (std::vector<Sample>& samples, const std::vector<Z
     pdtaBody.chunk ("inst", inst); pdtaBody.chunk ("ibag", ibag); pdtaBody.chunk ("imod", imod); pdtaBody.chunk ("igen", igen);
     pdtaBody.chunk ("shdr", shdr);
 
-    // --- INFO
     Buf info, ifil; ifil.u16 (2); ifil.u16 (1); info.chunk ("ifil", ifil);
     Buf isng; for (char c : std::string ("EMU8000")) isng.u8 ((uint8_t) c); isng.u8 (0); info.chunk ("isng", isng);
     Buf inam; for (char c : std::string ("Scout Test")) inam.u8 ((uint8_t) c); inam.u8 (0); info.chunk ("INAM", inam);
+    Buf ieng; for (char c : std::string ("vm-claude")) ieng.u8 ((uint8_t) c); ieng.u8 (0); info.chunk ("IENG", ieng);
 
     Buf riffBody; riffBody.fcc ("sfbk");
     riffBody.list ("INFO", info); riffBody.list ("sdta", sdtaBody); riffBody.list ("pdta", pdtaBody);
@@ -165,8 +159,6 @@ std::vector<uint8_t> buildSf2 (std::vector<Sample>& samples, const std::vector<Z
     return file.b;
 }
 
-// The original two-zone layout ([load]..[swap] were all written against it),
-// now expressed as data rather than hand-counted igen/ibag indices.
 std::vector<uint8_t> buildTestSf2 (std::vector<Sample>& samples)
 {
     std::vector<ZoneDesc> zones = {
@@ -201,7 +193,7 @@ std::vector<float> render (ScoutEngine& e, int n, int block = 64)
     return L;
 }
 
-// Minimal WAV writer for the Slot W tests: PCM 16/24 or float 32, optional smpl.
+// Minimal WAV writer: PCM 16/24 or float 32, optional smpl.
 struct WavSpec
 {
     int channels = 1; int bits = 16; bool isFloat = false; uint32_t rate = 44100;
@@ -259,6 +251,7 @@ const uint8_t* findChunk (const std::vector<uint8_t>& f, const char* id, size_t&
     }
     len = 0; return nullptr;
 }
+uint32_t rd32 (const uint8_t* q) { return (uint32_t) q[0] | ((uint32_t) q[1] << 8) | ((uint32_t) q[2] << 16) | ((uint32_t) q[3] << 24); }
 
 // Estimate period (in samples) of a sine by zero-crossing spacing.
 double estimatePeriod (const std::vector<float>& x, size_t from, size_t to)
@@ -269,12 +262,28 @@ double estimatePeriod (const std::vector<float>& x, size_t from, size_t to)
     if (zc.size() < 3) return 0.0;
     return (double) (zc.back() - zc.front()) / (double) (zc.size() - 1);
 }
+
+// loads a WAV image into a fresh WavSample (CHECKs it parsed)
+std::unique_ptr<WavSample> loadWav (const std::vector<uint8_t>& img, const char* name)
+{
+    std::string we; auto w = WavSample::load (img.data(), img.size(), name, we);
+    CHECK (w != nullptr);
+    return w;
+}
+// installs `w` in `slot` with its own markers and no attack fade, consumes the handoff
+void install (ScoutEngine& e, int slot, std::unique_ptr<WavSample> w, LoopKind kind)
+{
+    e.setSlotLoop (slot, w->loopStart, w->loopEnd, kind);
+    e.setSlotTuning (slot, w->rootKey, w->fineCents);
+    e.setSlotFades (slot, 0.0, 80.0);
+    delete e.setSlot (slot, w.release());
+    render (e, 64);
+    delete e.takeRetired (slot);
+}
 } // namespace
 
 // ----------------------------------------------------------------- tests
 // --probe <module> [outDir]: real-file diagnostic (not part of the check run).
-// Lists the module's sample table and, with outDir, exports every non-empty
-// sample as a loop-tagged WAV through the same bridge the plugin uses.
 static int probeModule (const char* path, const char* outDir)
 {
     FILE* f = std::fopen (path, "rb");
@@ -356,76 +365,82 @@ int main (int argc, char** argv)
     CHECK (bank->zoneForKey (0, 72)->sampleName == "Shot_C5");   // boundary key
     CHECK (noteName (60) == "C4" && noteName (72) == "C5" && noteName (0) == "C-1" && noteName (127) == "G9");
     CHECK (formatMs (45.35) == "45.4 ms" && formatMs (2000.0) == "2000 ms");
-
-    const uint32_t shotStart = z1->sampleStart;
-    const uint32_t loopStartAbs = z0->loopStart;
+    // INFO list (metadata box): file order, ifil rendered as major.minor
+    CHECK (bank->info().size() == 4);
+    CHECK (bank->infoValue ("INAM") == "Scout Test" && bank->infoValue ("isng") == "EMU8000" && bank->infoValue ("ifil") == "2.1" && bank->infoValue ("IENG") == "vm-claude");
+    CHECK (bank->infoValue ("ICOP").empty());
+    // decodeZone: the bridge into the engine (16-bit copy, inclusive loop end, root)
+    {
+        auto d0 = bank->decodeZone (*z0);
+        auto d1 = bank->decodeZone (*z1);
+        CHECK (d0 != nullptr && d0->frames == 4000 && d0->hasSmpl && d0->loopStart == 1000 && d0->loopEnd == 2999 && d0->rootKey == 60 && d0->sampleRate == 44100);
+        CHECK (d1 != nullptr && d1->frames == 2000 && ! d1->hasSmpl && d1->loopStart == 0 && d1->loopEnd == 1999 && d1->rootKey == 72);
+        CHECK (d1 != nullptr && std::fabs (d1->left[500] * 32768.0f - 1500.0f) < 0.51f);
+        CHECK (d0 != nullptr && d0->bextDescription.find ("Loop_C4") != std::string::npos);
+    }
 
     SECTION ("authored");
     {
         ScoutEngine e;
         e.prepare (44100.0);
-        e.setBank (bank.release());
         e.setMode (PlayMode::AsAuthored);
-        e.setPreset (0);
         // one-shot zone at its root: output must equal the ramp from sample 0, then stop
-        e.noteOn (72, 127);
+        install (e, kSlotCur, bank->decodeZone (*z1), LoopKind::Off);
+        e.noteOnSlot (kSlotCur, 72, 127);
         auto out = render (e, 2100);
-        CHECK (std::fabs (out[0] - (1000.0f / 32767.0f)) < 1e-4f);           // starts at sample start
-        CHECK (std::fabs (out[500] - (1500.0f / 32767.0f)) < 1e-4f);         // native pitch, 1:1
+        CHECK (std::fabs (out[0] - (1000.0f / 32768.0f)) < 1e-4f);           // starts at sample start
+        CHECK (std::fabs (out[500] - (1500.0f / 32768.0f)) < 1e-4f);         // native pitch, 1:1
         CHECK (e.activeVoiceCount() == 0);                                    // played through once, freed
         CHECK (out[2050] == 0.0f);
-        auto ln = e.lastNote();
-        // F5: lastSeq_ is a seqlock now -- it advances by 2 per note-on
-        // (odd mid-write, even once published), not 1. See ScoutEngine.h.
-        CHECK (ln.note == 72 && ln.zoneIndex == 1 && ln.velocity == 127 && ln.sequence == 2);
+        CHECK (e.lastNote (kSlotCur) == 72 && e.lastVelocity (kSlotCur) == 127 && e.noteCounter (kSlotCur) == 1);
+        CHECK (e.lastNote (kSlotA) == -1);                                    // other slots untouched
 
         // looped zone at root: sustains indefinitely, playhead stays inside the loop
-        e.noteOn (60, 100);
+        install (e, kSlotCur, bank->decodeZone (*z0), LoopKind::Forward);
+        e.noteOnSlot (kSlotCur, 60, 100);
         out = render (e, 44100);
         CHECK (e.activeVoiceCount() == 1);
-        const double ph = e.lastPlayhead();
+        const double ph = e.lastPlayhead (kSlotCur);
         CHECK (ph >= 1000.0 && ph < 3000.0);
         // loop seam is clean: the 100-sample sine loops over 2000 samples = 20 periods exactly
         double period = estimatePeriod (out, 5000, 44000);
         CHECK (std::fabs (period - 100.0) < 0.5);
         float peak = 0.0f; for (size_t i = 5000; i < 44100; ++i) peak = std::max (peak, std::fabs (out[i]));
         CHECK (peak > 0.3f && peak < 0.6f);                                   // sqrt(100/127)*0.5 = 0.44
-        (void) shotStart;
     }
 
     SECTION ("looponly");
     {
-        std::string e2; auto bank2 = SoundFontBank::load (file.data(), file.size(), e2);
         ScoutEngine e;
         e.prepare (44100.0);
-        e.setBank (bank2.release());
         e.setMode (PlayMode::LoopOnly);
-        e.setPreset (0);
-        e.noteOn (60, 127);
+        install (e, kSlotCur, bank->decodeZone (*z0), LoopKind::Forward);
+        e.noteOnSlot (kSlotCur, 60, 127);
         auto out = render (e, 64);
-        // first output sample == pool[loopStart] (sin(2*pi*1000/100) = 0 -> use sample 25 of the loop instead)
-        e.reset();
-        e.noteOn (60, 127);
-        out = render (e, 64);
-        const float expected25 = 0.5f * std::sin (2.0f * 3.14159265f * (float) (loopStartAbs + 25) / 100.0f);
+        // first output sample == frame loopStart (sin(2*pi*1000/100) = 0 -> use sample 25 of the loop instead)
+        const float expected25 = 0.5f * std::sin (2.0f * 3.14159265f * (float) (1000 + 25) / 100.0f);
         CHECK (std::fabs (out[25] - expected25) < 2e-3f);
-        CHECK (e.lastPlayhead() >= 1000.0 && e.lastPlayhead() < 3000.0);
+        CHECK (e.lastPlayhead (kSlotCur) >= 1000.0 && e.lastPlayhead (kSlotCur) < 3000.0);
 
-        // unlooped zone in LOOP-ONLY: loops the whole sample -> still active after 3x its length
-        e.reset();
-        e.noteOn (84, 127);
+        // an "off" loop in LOOP-ONLY: loops its marked region (the whole one-shot here) -> still active after 3x its length
+        install (e, kSlotCur, bank->decodeZone (*z1), LoopKind::Off);
+        e.noteOnSlot (kSlotCur, 84, 127);
         out = render (e, 6000);
         CHECK (e.activeVoiceCount() == 1);
         CHECK (out[5999] != 0.0f);
+        // back in AS-AUTHORED the same "off" loop plays once
+        e.reset(); e.setMode (PlayMode::AsAuthored);
+        e.noteOnSlot (kSlotCur, 72, 127);
+        render (e, 6000);
+        CHECK (e.activeVoiceCount() == 0);
     }
 
     SECTION ("pitch");
     {
-        std::string e3; auto bank3 = SoundFontBank::load (file.data(), file.size(), e3);
         ScoutEngine e;
         e.prepare (44100.0);
-        e.setBank (bank3.release());
-        e.setPreset (0);
+        install (e, kSlotA, bank->decodeZone (*z0), LoopKind::Forward);
+        e.setKeyboard (KbMode::A, 60, 0);
         e.noteOn (60, 127);
         auto out = render (e, 20000);
         CHECK (std::fabs (estimatePeriod (out, 4000, 20000) - 100.0) < 0.5);   // root -> native
@@ -443,15 +458,18 @@ int main (int argc, char** argv)
         e.prepare (44100.0); e.setPitchBend (2.0); e.noteOn (60, 127);
         out = render (e, 20000);
         CHECK (std::fabs (estimatePeriod (out, 4000, 20000) - 100.0 / std::pow (2.0, 2.0 / 12.0)) < 0.5);
+        // fine tune: root 50 cents flat -> plays 50 cents sharp
+        e.prepare (44100.0); e.setPitchBend (0.0); e.setSlotTuning (kSlotA, 60, -50.0); e.noteOn (60, 127);
+        out = render (e, 20000);
+        CHECK (std::fabs (estimatePeriod (out, 4000, 20000) - 100.0 / std::pow (2.0, 50.0 / 1200.0)) < 0.5);
     }
 
     SECTION ("release");
     {
-        std::string e4; auto bank4 = SoundFontBank::load (file.data(), file.size(), e4);
         ScoutEngine e;
         e.prepare (44100.0);
-        e.setBank (bank4.release());
-        e.setPreset (0);
+        install (e, kSlotA, bank->decodeZone (*z0), LoopKind::Forward);
+        e.setKeyboard (KbMode::A, 60, 0);
         e.noteOn (60, 127);
         render (e, 1000);
         e.noteOff (60);
@@ -461,10 +479,11 @@ int main (int argc, char** argv)
         CHECK (tail == 0.0f);            // silent after 80 ms
         float head = 0.0f; for (size_t i = 0; i < 100; ++i) head = std::max (head, std::fabs (out[i]));
         CHECK (head > 0.1f);             // but not cut instantly
-        // polyphony + stealing: 40 notes -> 32 voices, none lost to a crash
+        // polyphony + stealing: 20 notes -> 16 voices (spec), none lost to a crash
         e.reset();
-        for (int n = 0; n < 40; ++n) e.noteOn (30 + n, 100);
+        for (int n = 0; n < 20; ++n) e.noteOn (30 + n, 100);
         render (e, 64);
+        CHECK (ScoutEngine::kMaxVoices == 16);
         CHECK (e.activeVoiceCount() == ScoutEngine::kMaxVoices);
         e.allNotesOff();
         render (e, 8820);
@@ -479,7 +498,6 @@ int main (int argc, char** argv)
         CHECK (SoundFontBank::load (junk, sizeof (junk), m) == nullptr && ! m.empty());
         std::vector<uint8_t> riffOnly = { 'R','I','F','F', 4,0,0,0, 's','f','b','k' };
         CHECK (SoundFontBank::load (riffOnly.data(), riffOnly.size(), m) == nullptr);
-        // truncated at every 1/8th of the file -> never crash
         int refused = 0;
         for (int k = 1; k < 8; ++k)
         {
@@ -487,7 +505,6 @@ int main (int argc, char** argv)
             if (SoundFontBank::load (file.data(), cut, m) == nullptr) ++refused;
         }
         CHECK (refused >= 6);
-        // header claims a huge chunk size
         std::vector<uint8_t> lie = file; lie[4] = 0xff; lie[5] = 0xff; lie[6] = 0xff; lie[7] = 0x7f;
         (void) SoundFontBank::load (lie.data(), lie.size(), m);   // must not crash; result either way
         CHECK (true);
@@ -495,93 +512,76 @@ int main (int argc, char** argv)
 
     SECTION ("swap");
     {
-        std::string s1, s2;
-        auto a = SoundFontBank::load (file.data(), file.size(), s1);
-        auto b = SoundFontBank::load (file.data(), file.size(), s2);
-        SoundFontBank* araw = a.get();
         ScoutEngine e;
         e.prepare (44100.0);
-        e.setBank (a.release());
+        auto a = bank->decodeZone (*z0), b = bank->decodeZone (*z0);
+        WavSample* araw = a.get();
+        e.setSlotLoop (kSlotA, a->loopStart, a->loopEnd, LoopKind::Forward);
+        e.setSlotFades (kSlotA, 0.0, 80.0);
+        e.setSlot (kSlotA, a.release());
+        e.setKeyboard (KbMode::A, 60, 0);
         render (e, 64);
-        CHECK (e.takeRetiredBank() == nullptr);
+        CHECK (e.takeRetired (kSlotA) == nullptr);
+        CHECK (e.requested (kSlotA) == araw && e.hasSlot (kSlotA) && ! e.hasSlot (kSlotB));
         e.noteOn (60, 100);
         render (e, 64);
         CHECK (e.activeVoiceCount() == 1);
-        e.setBank (b.release());
-        CHECK (e.takeRetiredBank() == nullptr);      // not swapped until the audio thread runs
+        e.setSlot (kSlotA, b.release());
+        CHECK (e.takeRetired (kSlotA) == nullptr);   // not swapped until the audio thread runs
         render (e, 64);
-        CHECK (e.activeVoiceCount() == 0);           // voices killed on swap
-        SoundFontBank* r = e.takeRetiredBank();
+        CHECK (e.activeVoiceCount() == 0);           // voices of that slot killed on swap
+        WavSample* r = e.takeRetired (kSlotA);
         CHECK (r == araw);
         delete r;
-        CHECK (e.takeRetiredBank() == nullptr);
-        // replacing a pending bank before the audio thread runs must not leak or double-free
-        std::string s3, s4;
-        auto c = SoundFontBank::load (file.data(), file.size(), s3);
-        auto d = SoundFontBank::load (file.data(), file.size(), s4);
-        e.setBank (c.release());
-        e.setBank (d.release());                     // c deleted inside
+        CHECK (e.takeRetired (kSlotA) == nullptr);
+        // replacing a pending sample before the audio thread runs must not leak or double-free
+        auto c = bank->decodeZone (*z0), d = bank->decodeZone (*z0);
+        WavSample* craw = c.get();
+        CHECK (e.setSlot (kSlotA, c.release()) == nullptr);
+        WavSample* superseded = e.setSlot (kSlotA, d.release());   // c never reached the audio thread: handed back
+        CHECK (superseded == craw);
+        delete superseded;
         render (e, 64);
-        SoundFontBank* r2 = e.takeRetiredBank();
+        WavSample* r2 = e.takeRetired (kSlotA);
         CHECK (r2 != nullptr);
         delete r2;
         e.noteOn (60, 100); render (e, 64);
         CHECK (e.activeVoiceCount() == 1);
+        // a swap of slot B leaves slot A's voice sounding
+        install (e, kSlotB, bank->decodeZone (*z1), LoopKind::Off);
+        CHECK (e.activeVoiceCount() == 1);
+        // out-of-range slots are refused, not crashed
+        e.setSlot (7, nullptr); e.clearSlot (-1);
+        CHECK (e.takeRetired (9) == nullptr);
     }
 
     SECTION ("hostile-pitch");
     {
-        // A zone whose generator VALUES are individually legal (SF2 allows
-        // CoarseTune up to +-120 and ScaleTuning up to 1200) but whose COMBINED
-        // effect at an extreme note is not: TSF does not clamp either of these
-        // two fields on merge (genMetas rows 51 and 56 in tsf.h carry no
-        // _GEN_LIMIT_MASK), so nothing upstream of startVoice's pitch formula
-        // stops it. Before F1, note+transpose=247, keytrack=1200% would compute
-        // an exponent of 2^187 -- baseStep would be +inf/NaN, and renderVoice's
-        // old `while (pos >= loopEnd) pos -= length` would then spin the audio
-        // thread forever trying to walk an infinite pos back into the loop.
+        // legal-per-spec boundary generators (CoarseTune +-120, ScaleTuning 1200) still parse and clamp
         std::vector<Sample> hsamp = { { "HSample", sine (2000, 37.0), 100, 1900, 44100, 60 } };
         std::vector<ZoneDesc> hzones = {
             { keyRangeOp (0, 63),   genOp (GEN_SAMPLEMODES, 1), genOp (GEN_SAMPLEID, 0) },
             { keyRangeOp (64, 126), genOp (GEN_SAMPLEMODES, 0), genOp (GEN_SAMPLEID, 0) },
-            // the third, hostile zone: legal-per-spec boundary values, note 127.
-            // GEN_SAMPLEID must come LAST: tsf_load_presets resolves and pushes
-            // the region the instant it sees SAMPLEID, so any generator listed
-            // after it in the same zone would be silently dropped.
             { keyRangeOp (127, 127), genOp (GEN_SAMPLEMODES, 1),
               genOp (GEN_SCALETUNING, 1200), genOp (GEN_COARSETUNE, 120), genOp (GEN_SAMPLEID, 0) },
         };
         std::vector<uint8_t> hfile = buildSf2 (hsamp, hzones);
         std::string herr; auto hbank = SoundFontBank::load (hfile.data(), hfile.size(), herr);
         CHECK (hbank != nullptr);
-
-        ScoutEngine e;
-        e.prepare (44100.0);
-        e.setBank (hbank.release());
-        e.setPreset (0);
-        e.noteOn (127, 127);
-        auto out = render (e, 4096);          // must return -- proves no spin/hang
-        CHECK (e.activeVoiceCount() <= ScoutEngine::kMaxVoices);
-        // Not possible to inject a NaN from the file itself (every generator is
-        // a plain int16), so this is the closest a black-box harness can get to
-        // "the clamp held": every rendered sample stayed finite and inside a
-        // sane amplitude envelope instead of the file's step overflowing to
-        // +-inf/NaN and poisoning the whole buffer.
-        float maxAbs = 0.0f;
-        bool allFinite = true;
-        for (float v : out) { allFinite = allFinite && std::isfinite (v); maxAbs = std::max (maxAbs, std::fabs (v)); }
-        CHECK (allFinite);
-        CHECK (maxAbs < 2.0f);
-
-        // Direct unit test of the OTHER half of F1: SoundFontBank::load's own
-        // clamp on transpose/keytrack/tuneCents, using generator values that
-        // are themselves out of the SF2 spec's legal range (still representable
-        // as a single int16 generator amount, so TSF happily stores them).
+        if (hbank != nullptr)
+        {
+            const Zone* hz = hbank->zoneForKey (0, 127);
+            CHECK (hz != nullptr && hz->transpose == 120 && hz->keytrack == 1200);
+            // decoded: root - coarseTune folds the transpose into the root (clamped to 0..127)
+            auto dz = hbank->decodeZone (*hz);
+            CHECK (dz != nullptr && dz->rootKey == 0);
+        }
+        // out-of-spec generator amounts clamp at load
         std::vector<Sample> csamp = { { "CSample", sine (2000, 41.0), 100, 1900, 44100, 60 } };
         std::vector<ZoneDesc> czones = {
             { keyRangeOp (0, 127), genOp (GEN_SAMPLEMODES, 1),
               genOp (GEN_COARSETUNE, 32000), genOp (GEN_SCALETUNING, 32000), genOp (GEN_FINETUNE, 32000),
-              genOp (GEN_SAMPLEID, 0) },   // SAMPLEID last -- see comment above
+              genOp (GEN_SAMPLEID, 0) },
         };
         std::vector<uint8_t> cfile = buildSf2 (csamp, czones);
         std::string cerr; auto cbank = SoundFontBank::load (cfile.data(), cfile.size(), cerr);
@@ -596,64 +596,59 @@ int main (int argc, char** argv)
                 CHECK (cz->keytrack <= 1200 && cz->keytrack >= 0);
                 CHECK (cz->tuneCents <= 12000.0 && cz->tuneCents >= -12000.0);
             }
-
-            ScoutEngine e2;
-            e2.prepare (44100.0);
-            e2.setBank (cbank.release());
-            e2.setPreset (0);
-            e2.noteOn (60, 127);
-            auto out2 = render (e2, 2048);
-            bool finite2 = true; for (float v : out2) finite2 = finite2 && std::isfinite (v);
-            CHECK (finite2);
-            CHECK (e2.activeVoiceCount() <= ScoutEngine::kMaxVoices);
         }
+        // the engine clamps the STEP itself: a hostile root/cents/rate can never spin or poison the buffer
+        ScoutEngine e; e.prepare (44100.0);
+        install (e, kSlotA, bank->decodeZone (*z0), LoopKind::Forward);
+        e.setKeyboard (KbMode::A, 60, 0);
+        e.setSlotTuning (kSlotA, 0, -12000.0);
+        e.noteOn (127, 127);
+        auto out = render (e, 4096);
+        bool fin = true; float maxAbs = 0.0f;
+        for (float v : out) { fin = fin && std::isfinite (v); maxAbs = std::max (maxAbs, std::fabs (v)); }
+        CHECK (fin && maxAbs < 2.0f && e.activeVoiceCount() <= ScoutEngine::kMaxVoices);
+        e.reset(); e.setSlotTuning (kSlotA, 127, 12000.0); e.noteOn (0, 127);
+        out = render (e, 4096);
+        fin = true; for (float v : out) fin = fin && std::isfinite (v);
+        CHECK (fin);
+        const double nan = std::nan ("");
+        e.reset(); e.setSlotTuning (kSlotA, 60, nan); e.noteOn (60, 127);
+        out = render (e, 2048);
+        fin = true; for (float v : out) fin = fin && std::isfinite (v);
+        CHECK (fin && e.activeVoiceCount() == 1);
+        // a 2-frame ping-pong loop at a huge step must not spin or escape
+        e.reset(); e.setSlotLoop (kSlotA, 500, 501, LoopKind::PingPong); e.setSlotTuning (kSlotA, 0, 0.0); e.noteOn (127, 127);
+        out = render (e, 4096);
+        fin = true; for (float v : out) fin = fin && std::isfinite (v);
+        CHECK (fin);
     }
 
-    SECTION ("seqlock");
+    SECTION ("last-note");
     {
-        std::string es; auto bankS = SoundFontBank::load (file.data(), file.size(), es);
-        ScoutEngine e;
-        e.prepare (44100.0);
-        e.setBank (bankS.release());
-        e.setPreset (0);
+        ScoutEngine e; e.prepare (44100.0);
+        install (e, kSlotA, bank->decodeZone (*z0), LoopKind::Forward);
+        install (e, kSlotB, bank->decodeZone (*z1), LoopKind::Off);
+        e.setKeyboard (KbMode::A, 60, 0);
+        const uint32_t before = e.noteCounter (kSlotA);
         e.noteOn (60, 100);
         e.noteOn (72, 90);                    // second note-on before any process() call
-        auto ln = e.lastNote();
-        CHECK ((ln.sequence % 2u) == 0u);     // never caught mid-write (an odd sequence)
-        CHECK (ln.note == 72 && ln.velocity == 90 && ln.zoneIndex == 1);   // reflects the LAST note-on
-        // repeated reads settle on the same consistent snapshot
-        for (int k = 0; k < 20; ++k)
-        {
-            auto ln2 = e.lastNote();
-            CHECK (ln2.sequence == ln.sequence && ln2.note == 72 && ln2.velocity == 90 && ln2.zoneIndex == 1);
-        }
-        // a third note-on bumps the sequence again (by 2: odd-then-even) and
-        // publishes a new, fully consistent tuple
-        e.noteOn (60, 50);
-        auto ln3 = e.lastNote();
-        CHECK (ln3.sequence == ln.sequence + 2);
-        CHECK (ln3.note == 60 && ln3.velocity == 50 && ln3.zoneIndex == 0);
+        CHECK (e.lastNote (kSlotA) == 72 && e.lastVelocity (kSlotA) == 90 && e.noteCounter (kSlotA) == before + 2);
+        CHECK (e.lastNote (kSlotB) == -1 && e.noteCounter (kSlotB) == 0);
+        e.noteOnSlot (kSlotB, 84, 50);
+        CHECK (e.lastNote (kSlotB) == 84 && e.lastVelocity (kSlotB) == 50 && e.noteCounter (kSlotB) == 1);
+        CHECK (e.lastNote (kSlotA) == 72);    // untouched by the B audition
+        render (e, 64);
+        CHECK (e.activeVoiceCount() == 3 && e.lastPlayhead (kSlotA) >= 0.0 && e.lastPlayhead (kSlotB) >= 0.0 && e.lastPlayhead (kSlotCur) < 0.0);
     }
 
     SECTION ("sample-id");
     {
-        // Two real samples; a zone whose SAMPLEID names sample 1 but whose
-        // startAddrsOffset generator makes the ABSOLUTE offset land inside
-        // sample 0's [start,end) span. The old offset-based join
-        // (shdrForRegion) would misidentify this as sample 0; F6 makes the
-        // join trust tsf_region::sample_id (set from the SAMPLEID generator
-        // itself) whenever it's valid, so the name follows sample_id, not
-        // the offset.
         std::vector<Sample> ssamp = {
             { "SampA", sine (300, 60.0), 0, 0, 44100, 60 },   // pool [0, 300)
             { "SampB", sine (300, 45.0), 0, 0, 44100, 60 },   // pool [346, 646) (300 + 46 guard)
         };
         std::vector<ZoneDesc> szones = {
-            // offset lands inside its OWN sample (unambiguous either way).
-            // SAMPLEID last -- see the "SAMPLEID must come LAST" note above.
             { keyRangeOp (0, 63), genOp (GEN_SAMPLEMODES, 0), genOp (GEN_STARTADDRSOFFSET, 200), genOp (GEN_SAMPLEID, 0) },
-            // SAMPLEID names sample 1 (SampB, starts at 346); offset -246 makes
-            // the absolute offset 346-246=100 -- inside SampA's [0,300) span
             { keyRangeOp (64, 127), genOp (GEN_SAMPLEMODES, 0), genOp (GEN_STARTADDRSOFFSET, -246), genOp (GEN_SAMPLEID, 1) },
         };
         std::vector<uint8_t> sfile = buildSf2 (ssamp, szones);
@@ -671,25 +666,16 @@ int main (int argc, char** argv)
             }
             if (zy != nullptr)
             {
-                // the key assertion: name/index follow sample_id (SampB), NOT
-                // the misleading offset (which points into SampA's range)
                 CHECK (zy->sampleName == "SampB");
                 CHECK (zy->sampleIndex == 1);
+                auto dy = sbank->decodeZone (*zy);
+                CHECK (dy != nullptr && dy->frames == 300);
             }
         }
     }
 
     SECTION ("stereo-pair");
     {
-        // Two linked halves (sampleType 4 = left, 2 = right) both covering key
-        // 96, pan left at its generator default (0) -- F11 says an untouched
-        // stereo half hard-pans by sampleType instead of sitting centred.
-        // Distinct, DC-free sine periods per side make channel bleed audible
-        // to estimatePeriod(): if F11 were absent (or wrong), each channel
-        // would be a mix of BOTH periods and the zero-crossing spacing would
-        // not cleanly track either one.
-        // root = 96 = played note, so pitch is native (1:1) and the periods
-        // below survive into the render untouched.
         std::vector<Sample> psamp = {
             { "SampL", sine (4000, 70.0),  0, 0, 44100, 96, 4 /*left*/,  1 },
             { "SampR", sine (4000, 110.0), 0, 0, 44100, 96, 2 /*right*/, 0 },
@@ -705,34 +691,27 @@ int main (int argc, char** argv)
         {
             const Zone* pz[8];
             CHECK (pbank->findZones (0, 96, 127, pz, 8) == 2);   // a stereo pair gives 2 zones
-
-            ScoutEngine e;
-            e.prepare (44100.0);
-            e.setBank (pbank.release());
-            e.setPreset (0);
-            e.noteOn (96, 127);
-            std::vector<float> outL ((size_t) 3000, 0.0f), outR ((size_t) 3000, 0.0f);
-            for (int i = 0; i < 3000; i += 64)
-            {
-                const int m = std::min (64, 3000 - i);
-                e.process (outL.data() + i, outR.data() + i, m, 1.0f);
-            }
-            CHECK (std::fabs (estimatePeriod (outL, 500, 3000) - 70.0) < 0.5);
-            CHECK (std::fabs (estimatePeriod (outR, 500, 3000) - 110.0) < 0.5);
-            float peakL = 0.0f, peakR = 0.0f;
-            for (size_t i = 500; i < 3000; ++i) { peakL = std::max (peakL, std::fabs (outL[i])); peakR = std::max (peakR, std::fabs (outR[i])); }
-            CHECK (peakL > 0.3f && peakL < 0.6f);
-            CHECK (peakR > 0.3f && peakR < 0.6f);
+            CHECK (pz[0]->isStereoHalf() && pz[1]->isStereoHalf());
+            // each half decodes to its own mono sample at native pitch (OPEN QUESTION 10: two mono files)
+            auto dl = pbank->decodeZone (*pz[0]);
+            auto dr = pbank->decodeZone (*pz[1]);
+            CHECK (dl != nullptr && dr != nullptr && ! dl->isStereo() && ! dr->isStereo());
+            CHECK (dl != nullptr && dl->bextDescription.find ("stereo=L") != std::string::npos);
+            CHECK (dr != nullptr && dr->bextDescription.find ("stereo=R") != std::string::npos);
+            ScoutEngine e; e.prepare (44100.0);
+            install (e, kSlotA, std::move (dl), LoopKind::Off);
+            install (e, kSlotB, std::move (dr), LoopKind::Off);
+            e.setKeyboard (KbMode::A, 60, 0); e.noteOn (96, 127);
+            auto out = render (e, 3000);
+            CHECK (std::fabs (estimatePeriod (out, 500, 3000) - 70.0) < 0.5);
+            e.reset(); e.setKeyboard (KbMode::B, 60, 0); e.noteOn (96, 127);
+            out = render (e, 3000);
+            CHECK (std::fabs (estimatePeriod (out, 500, 3000) - 110.0) < 0.5);
         }
     }
 
     SECTION ("pool-bound");
     {
-        // shdr.end lies far past the real smpl chunk. TSF clamps every
-        // region's `end` to the true float pool size at load time
-        // (tsf_load_presets' fontSampleCount), never to the header's claim;
-        // F7 makes SoundFontBank::sampleCount() equal to THAT clamp, and
-        // clamps every Zone position to it too, instead of trusting shdr.end.
         std::vector<Sample> lsamp = { { "LiarSamp", ramp (200), 0, 0, 44100, 60 } };
         lsamp[0].endOverride = 5000;   // claims 5000 samples; only 200 real + 46 guard exist
         std::vector<ZoneDesc> lzones = { { keyRangeOp (0, 127), genOp (GEN_SAMPLEMODES, 0), genOp (GEN_SAMPLEID, 0) } };
@@ -741,7 +720,6 @@ int main (int argc, char** argv)
         CHECK (lbank != nullptr);
         if (lbank != nullptr)
         {
-            // exactly the real pool (200 pcm + 46 guard), never the 5000 lie
             CHECK (lbank->sampleCount() == 246);
             const Zone* lz = lbank->zoneForKey (0, 60);
             CHECK (lz != nullptr);
@@ -749,24 +727,22 @@ int main (int argc, char** argv)
             {
                 CHECK (lz->playEnd <= lbank->sampleCount());
                 CHECK (lz->sampleEnd <= lbank->sampleCount());
+                auto d = lbank->decodeZone (*lz);
+                CHECK (d != nullptr && d->frames == 246);                       // exactly the real pool, never the 5000 lie
+                ScoutEngine e; e.prepare (44100.0);
+                install (e, kSlotCur, std::move (d), LoopKind::Off);
+                e.noteOnSlot (kSlotCur, 60, 127);
+                auto out = render (e, 4000);
+                CHECK (e.activeVoiceCount() == 0);                             // reached its clamped end and freed
+                float head = 0.0f; for (size_t i = 0; i < 50; ++i) head = std::max (head, std::fabs (out[i]));
+                CHECK (head > 0.0f);
             }
-
-            ScoutEngine e;
-            e.prepare (44100.0);
-            e.setBank (lbank.release());
-            e.setPreset (0);
-            e.noteOn (60, 127);
-            auto out = render (e, 4000);   // far more than the real (clamped) sample length
-            CHECK (e.activeVoiceCount() == 0);   // one-shot zone reached its clamped end and freed -- no crash, no runaway
-            float head = 0.0f; for (size_t i = 0; i < 50; ++i) head = std::max (head, std::fabs (out[i]));
-            CHECK (head > 0.0f);
         }
     }
 
-    // ================================================================ Slot W
+    // ================================================================ WAV source
     SECTION ("wav-load");
     {
-        // 16-bit mono with a smpl chunk: markers, type, root and fine tune come from the file
         WavSpec sp; sp.withSmpl = true; sp.loopStart = 100; sp.loopEnd = 200; sp.type = 1; sp.unity = 62;
         sp.fraction = centsToPitchFraction (25.0);
         auto img = buildWav (indexRamp (1000), {}, sp);
@@ -777,24 +753,22 @@ int main (int argc, char** argv)
         {
             CHECK (w->frames == 1000 && w->channels == 1 && w->bitsPerSample == 16 && w->sampleRate == 44100);
             CHECK (w->hasSmpl && w->loopStart == 100 && w->loopEnd == 200 && w->loopType == 1);
-            CHECK (w->rootKey == 62 && w->rootFromFile);                       // smpl root beats the file-name note
+            CHECK (w->rootKey == 62 && w->rootFromFile);
             CHECK (std::fabs (w->fineCents - 25.0) < 1e-4);
             CHECK (std::fabs (w->left[500] * 32768.0f - 500.0f) < 1e-3f);
             CHECK (! w->isStereo());
-            CHECK (w->chunks.size() == 2);                                      // fmt + data retained, smpl dropped for rewrite
+            CHECK (w->chunks.size() == 2);
         }
-        // no smpl: root from <PREFIX>_<NOTE>.wav, else 60
         WavSpec plain;
         auto img2 = buildWav (indexRamp (500), {}, plain);
         auto w2 = WavSample::load (img2.data(), img2.size(), "JD_STR1_C4.wav", werr);
         CHECK (w2 != nullptr && ! w2->hasSmpl && w2->rootKey == 60 && w2->rootFromFile);
-        CHECK (w2 != nullptr && w2->loopStart == 0 && w2->loopEnd == 499);      // default: whole file
+        CHECK (w2 != nullptr && w2->loopStart == 0 && w2->loopEnd == 499);
         auto w3 = WavSample::load (img2.data(), img2.size(), "take7.wav", werr);
         CHECK (w3 != nullptr && w3->rootKey == 60 && ! w3->rootFromFile);
         CHECK (rootFromFileName ("X_F#3.wav") == 54 && rootFromFileName ("X_Bb2.wav") == 46 && rootFromFileName ("X_C-1.wav") == 0
                && rootFromFileName ("X_A4.wav") == 69 && rootFromFileName ("X_G9.wav") == 127 && rootFromFileName ("X_H4.wav") == -1
                && rootFromFileName ("noext") == -1 && rootFromFileName ("X_C.wav") == -1);
-        // stereo 24-bit and 32-bit float decode
         WavSpec s24; s24.channels = 2; s24.bits = 24;
         auto img3 = buildWav (sineF (300, 30.0), sineF (300, 50.0), s24);
         auto w4 = WavSample::load (img3.data(), img3.size(), "st.wav", werr);
@@ -805,7 +779,6 @@ int main (int argc, char** argv)
         auto img4 = buildWav (sineF (300, 30.0), {}, sf);
         auto w5 = WavSample::load (img4.data(), img4.size(), "f.wav", werr);
         CHECK (w5 != nullptr && w5->formatTag == 3 && std::fabs (w5->left[7] - 0.5f * std::sin (2.0f * 3.14159265f * 7.0f / 30.0f)) < 1e-6f);
-        // malformed input: error string, never a crash
         CHECK (WavSample::load (nullptr, 0, "x", werr) == nullptr && ! werr.empty());
         const char junk[] = "RIFF....WAVEjunkjunkjunkjunkjunkjunk";
         CHECK (WavSample::load (junk, sizeof (junk), "x", werr) == nullptr && ! werr.empty());
@@ -820,18 +793,12 @@ int main (int argc, char** argv)
         CHECK (true);
     }
 
-    // a fresh engine with the SF2 bank in R and a WAV in W
+    // a fresh engine with a WAV in slot A, keyboard on A, no attack fade
     auto makeEngine = [&] (ScoutEngine& e, std::vector<uint8_t>& wavImg, const char* name)
     {
-        std::string be; auto b = SoundFontBank::load (file.data(), file.size(), be);
-        std::string we; auto w = WavSample::load (wavImg.data(), wavImg.size(), name, we);
-        CHECK (b != nullptr && w != nullptr);
         e.prepare (44100.0);
-        e.setBank (b.release());
-        e.setPreset (0);
-        e.setWav (w.release());
-        e.setWavFades (0.0, 80.0);          // no attack fade: sample-exact output for the ramp checks
-        render (e, 64);                     // consume both handoffs
+        install (e, kSlotA, loadWav (wavImg, name), LoopKind::Forward);
+        e.setKeyboard (KbMode::A, 60, 0);
         e.reset();
     };
 
@@ -840,24 +807,22 @@ int main (int argc, char** argv)
         WavSpec sp; sp.withSmpl = true; sp.loopStart = 0; sp.loopEnd = 39999; sp.type = 0; sp.unity = 60;
         auto img = buildWav (sineF (40000, 100.0), {}, sp);
         ScoutEngine e; makeEngine (e, img, "S_C4.wav");
-        e.setFocus (Focus::W, 60);
-        e.setWavLoop (0, 39999, WavLoopMode::Forward);
-        e.setWavTuning (60, 0.0);
+        e.setSlotLoop (kSlotA, 0, 39999, LoopKind::Forward);
+        e.setSlotTuning (kSlotA, 60, 0.0);
         e.noteOn (60, 127);
         auto out = render (e, 20000);
         CHECK (std::fabs (estimatePeriod (out, 4000, 20000) - 100.0) < 0.5);    // root at root: unity rate
-        CHECK (e.lastWavNote() == 60 && e.lastWavPlayhead() >= 0.0);
+        CHECK (e.lastNote (kSlotA) == 60 && e.lastPlayhead (kSlotA) >= 0.0);
         e.reset(); e.noteOn (72, 127);
         out = render (e, 20000);
         CHECK (std::fabs (estimatePeriod (out, 4000, 20000) - 50.0) < 0.5);     // +12 st: double rate
-        e.reset(); e.setWavTuning (60, -50.0); e.noteOn (60, 127);                // root is 50 cents flat -> play 50 cents sharp
+        e.reset(); e.setSlotTuning (kSlotA, 60, -50.0); e.noteOn (60, 127);
         out = render (e, 20000);
         CHECK (std::fabs (estimatePeriod (out, 4000, 20000) - 100.0 / std::pow (2.0, 50.0 / 1200.0)) < 0.5);
-        e.reset(); e.setWavTuning (48, 0.0); e.noteOn (60, 127);                  // root C3: C4 is +12
+        e.reset(); e.setSlotTuning (kSlotA, 48, 0.0); e.noteOn (60, 127);
         out = render (e, 20000);
         CHECK (std::fabs (estimatePeriod (out, 4000, 20000) - 50.0) < 0.5);
-        // host at 96 kHz: period scales with the rate ratio
-        e.prepare (96000.0); e.setWavTuning (60, 0.0); e.noteOn (60, 127);
+        e.prepare (96000.0); e.setSlotTuning (kSlotA, 60, 0.0); e.noteOn (60, 127);
         out = render (e, 20000);
         CHECK (std::fabs (estimatePeriod (out, 4000, 20000) - 100.0 * 96000.0 / 44100.0) < 1.0);
     }
@@ -867,8 +832,7 @@ int main (int argc, char** argv)
         WavSpec sp;
         auto img = buildWav (indexRamp (1000), {}, sp);
         ScoutEngine e; makeEngine (e, img, "R_C4.wav");
-        e.setFocus (Focus::W, 60);
-        e.setWavLoop (100, 200, WavLoopMode::Forward);       // inclusive: plays 100..200 = 101 frames
+        e.setSlotLoop (kSlotA, 100, 200, LoopKind::Forward);       // inclusive: plays 100..200 = 101 frames
         e.noteOn (60, 127);
         auto out = render (e, 44100);
         auto expectFwd = [] (int k) { return k <= 200 ? (double) k : 100.0 + std::fmod ((double) (k - 100), 101.0); };
@@ -877,10 +841,10 @@ int main (int argc, char** argv)
             if (std::fabs (out[(size_t) k] * 32768.0f - expectFwd (k)) > 0.01f) { exact = false; if (firstBad < 0) firstBad = k; }
         CHECK (exact);
         if (! exact) std::printf ("  first mismatch at %d: got %f want %f\n", firstBad, out[(size_t) firstBad] * 32768.0f, expectFwd (firstBad));
-        CHECK (std::fabs (out[200] * 32768.0f - 200.0f) < 0.01f);   // last loop frame plays
-        CHECK (std::fabs (out[201] * 32768.0f - 100.0f) < 0.01f);   // then wraps to loopStart
-        CHECK (e.activeVoiceCount() == 1);                          // one second later: still cycling, no drift
-        const double ph = e.lastWavPlayhead();
+        CHECK (std::fabs (out[200] * 32768.0f - 200.0f) < 0.01f);
+        CHECK (std::fabs (out[201] * 32768.0f - 100.0f) < 0.01f);
+        CHECK (e.activeVoiceCount() == 1);
+        const double ph = e.lastPlayhead (kSlotA);
         CHECK (ph >= 100.0 && ph <= 200.0);
     }
 
@@ -889,31 +853,23 @@ int main (int argc, char** argv)
         WavSpec sp;
         auto img = buildWav (indexRamp (1000), {}, sp);
         ScoutEngine e; makeEngine (e, img, "R_C4.wav");
-        e.setFocus (Focus::W, 60);
-        e.setWavLoop (100, 200, WavLoopMode::PingPong);
+        e.setSlotLoop (kSlotA, 100, 200, LoopKind::PingPong);
         e.noteOn (60, 127);
         auto out = render (e, 44100);
-        // triangle: 0..200 up, then 199..100 down, 101..200 up, ... each marker frame played exactly once per pass
         auto expectPP = [] (int k) { if (k <= 200) return (double) k; const int t = (k - 100) % 200; return t <= 100 ? 100.0 + t : 300.0 - t; };
         bool exact = true; int firstBad = -1;
         for (int k = 0; k < 44100; ++k)
             if (std::fabs (out[(size_t) k] * 32768.0f - expectPP (k)) > 0.01f) { exact = false; if (firstBad < 0) firstBad = k; }
         CHECK (exact);
         if (! exact) std::printf ("  first mismatch at %d: got %f want %f\n", firstBad, out[(size_t) firstBad] * 32768.0f, expectPP (firstBad));
-        CHECK (std::fabs (out[200] * 32768.0f - 200.0f) < 0.01f && std::fabs (out[201] * 32768.0f - 199.0f) < 0.01f);   // reversal at loopEnd
-        CHECK (std::fabs (out[300] * 32768.0f - 100.0f) < 0.01f && std::fabs (out[301] * 32768.0f - 101.0f) < 0.01f);   // reversal at loopStart
+        CHECK (std::fabs (out[200] * 32768.0f - 200.0f) < 0.01f && std::fabs (out[201] * 32768.0f - 199.0f) < 0.01f);
+        CHECK (std::fabs (out[300] * 32768.0f - 100.0f) < 0.01f && std::fabs (out[301] * 32768.0f - 101.0f) < 0.01f);
         CHECK (e.activeVoiceCount() == 1);
-        // ping-pong at a non-integer rate stays inside the markers and finite
         e.reset(); e.noteOn (67, 127);
         out = render (e, 44100);
         bool inRange = true;
         for (int k = 300; k < 44100; ++k) { const float v = out[(size_t) k] * 32768.0f; if (! std::isfinite (v) || v < 99.0f || v > 201.0f) inRange = false; }
         CHECK (inRange);
-        // hostile: a loop of 2 frames at a huge step must not spin or escape
-        e.reset(); e.setWavLoop (500, 501, WavLoopMode::PingPong); e.setWavTuning (0, 0.0); e.noteOn (127, 127);
-        out = render (e, 4096);
-        bool fin = true; for (float v : out) fin = fin && std::isfinite (v);
-        CHECK (fin);
     }
 
     SECTION ("wav-oneshot");
@@ -921,15 +877,14 @@ int main (int argc, char** argv)
         WavSpec sp;
         auto img = buildWav (indexRamp (1000), {}, sp);
         ScoutEngine e; makeEngine (e, img, "R_C4.wav");
-        e.setFocus (Focus::W, 60);
-        e.setWavLoop (100, 200, WavLoopMode::Off);
+        e.setSlotLoop (kSlotA, 100, 200, LoopKind::Off);
         e.noteOn (60, 127);
         auto out = render (e, 1500);
         CHECK (std::fabs (out[150] * 32768.0f - 150.0f) < 0.01f);   // markers ignored: straight through
         CHECK (std::fabs (out[998] * 32768.0f - 998.0f) < 0.01f);
         CHECK (out[1100] == 0.0f);
-        CHECK (e.activeVoiceCount() == 0);                          // freed at the end of the file
-        CHECK (e.lastWavPlayhead() < 0.0);
+        CHECK (e.activeVoiceCount() == 0);
+        CHECK (e.lastPlayhead (kSlotA) < 0.0);
     }
 
     SECTION ("wav-release");
@@ -937,70 +892,95 @@ int main (int argc, char** argv)
         WavSpec sp;
         auto img = buildWav (indexRamp (1000), {}, sp);
         ScoutEngine e; makeEngine (e, img, "R_C4.wav");
-        e.setFocus (Focus::W, 60);
-        e.setWavLoop (100, 200, WavLoopMode::Forward);
-        e.setWavFades (0.0, 100.0);                                 // 100 ms release
+        e.setSlotLoop (kSlotA, 100, 200, LoopKind::Forward);
+        e.setSlotFades (kSlotA, 0.0, 100.0);                        // 100 ms release
         e.noteOn (60, 127);
-        render (e, 300);                                            // inside the loop now
+        render (e, 300);
         e.noteOff (60);
         auto out = render (e, 6000);
-        // the loop keeps cycling under the fade: the SHAPE is still the ramp (ratio of neighbours matches),
-        // scaled by a monotonically decreasing envelope
         const float a = out[10] * 32768.0f, b = out[11] * 32768.0f;
         const double p10 = 100.0 + std::fmod (310.0 - 100.0, 101.0), p11 = 100.0 + std::fmod (311.0 - 100.0, 101.0);
         CHECK (a > 0.0f && b > 0.0f);
-        CHECK (std::fabs ((double) b / (double) a - p11 / p10) < 0.02);     // envelope barely moves over one sample
+        CHECK (std::fabs ((double) b / (double) a - p11 / p10) < 0.02);
         float env10 = a / (float) p10, env2000 = out[2000] * 32768.0f / (float) (100.0 + std::fmod (2300.0 - 100.0, 101.0));
-        CHECK (env10 > env2000 && env2000 > 0.0f);                 // fading, not cut
-        CHECK (e.activeVoiceCount() == 0);                          // gone after 100 ms
+        CHECK (env10 > env2000 && env2000 > 0.0f);
+        CHECK (e.activeVoiceCount() == 0);
         float tail = 0.0f; for (size_t i = 4500; i < out.size(); ++i) tail = std::max (tail, std::fabs (out[i]));
         CHECK (tail == 0.0f);
-        // attack fade-in: 10 ms ramp from silence
-        e.reset(); e.setWavFades (10.0, 80.0); e.noteOn (60, 127);
+        e.reset(); e.setSlotFades (kSlotA, 10.0, 80.0); e.noteOn (60, 127);
         out = render (e, 600);
-        CHECK (out[0] * 32768.0f < 1.0f);                           // starts (near) silent
-        CHECK (std::fabs (out[500] * 32768.0f - (100.0f + (float) ((500 - 100) % 101))) < 0.01f);   // fully open after 441 samples (loop 100..200 is on)
+        CHECK (out[0] * 32768.0f < 1.0f);
+        CHECK (std::fabs (out[500] * 32768.0f - (100.0f + (float) ((500 - 100) % 101))) < 0.01f);
+        // per-slot release: slot B keeps its own time
+        install (e, kSlotB, loadWav (img, "B_C4.wav"), LoopKind::Forward);
+        e.setSlotLoop (kSlotB, 100, 200, LoopKind::Forward);
+        e.setSlotFades (kSlotB, 0.0, 10.0);
+        e.reset(); e.setKeyboard (KbMode::B, 60, 0); e.noteOn (60, 127); render (e, 300); e.noteOff (60);
+        render (e, 600);                                            // 13.6 ms > 10 ms
+        CHECK (e.activeVoiceCount() == 0);
     }
 
-    SECTION ("wav-focus");
+    SECTION ("routing");
     {
         WavSpec sp;
-        auto img = buildWav (indexRamp (1000), {}, sp);
-        ScoutEngine e; makeEngine (e, img, "R_C4.wav");
-        e.setWavLoop (100, 200, WavLoopMode::Forward);
-        // R: the SF2 plays, the WAV does not
-        e.setFocus (Focus::R, 60);
+        auto rampImg = buildWav (indexRamp (1000), {}, sp);
+        auto sineImg = buildWav (sineF (4000, 100.0), {}, sp);
+        ScoutEngine e; makeEngine (e, rampImg, "A_C4.wav");
+        install (e, kSlotB, loadWav (sineImg, "B_C4.wav"), LoopKind::Forward);
+        e.setSlotLoop (kSlotA, 100, 200, LoopKind::Forward);
+        e.setSlotLoop (kSlotB, 0, 3999, LoopKind::Forward);
+        // A: only A plays
+        e.setKeyboard (KbMode::A, 60, 0);
         e.noteOn (60, 100); render (e, 64);
-        CHECK (e.lastNote().note == 60 && e.lastWavNote() == -1 && e.lastWavPlayhead() < 0.0 && e.lastPlayhead() >= 0.0);
-        // W: the WAV plays, the SF2 readout is untouched
-        e.reset(); const auto seqBefore = e.lastNote().sequence;
-        e.setFocus (Focus::W, 60);
+        CHECK (e.lastNote (kSlotA) == 60 && e.lastNote (kSlotB) == -1 && e.lastPlayhead (kSlotB) < 0.0 && e.lastPlayhead (kSlotA) >= 0.0);
+        // B: only B plays, A's readout untouched
+        e.reset(); const auto seqA = e.noteCounter (kSlotA);
+        e.setKeyboard (KbMode::B, 60, 0);
         e.noteOn (72, 100); render (e, 64);
-        CHECK (e.lastWavNote() == 72 && e.lastNote().sequence == seqBefore && e.lastWavPlayhead() >= 0.0 && e.lastPlayhead() < 0.0);
-        // SPLIT at C4: 59 -> R, 60 -> W
+        CHECK (e.lastNote (kSlotB) == 72 && e.noteCounter (kSlotA) == seqA && e.lastPlayhead (kSlotB) >= 0.0 && e.lastPlayhead (kSlotA) < 0.0);
+        // SPLIT at C4: 59 -> A, 60 -> B
         e.reset();
-        e.setFocus (Focus::Split, 60);
+        e.setKeyboard (KbMode::Split, 60, 0);
         e.noteOn (59, 100); render (e, 64);
-        CHECK (e.lastNote().note == 59 && e.lastWavNote() == 72);
+        CHECK (e.lastNote (kSlotA) == 59 && e.lastNote (kSlotB) == 72);
         e.noteOn (60, 100); render (e, 64);
-        CHECK (e.lastWavNote() == 60 && e.lastNote().note == 59);
+        CHECK (e.lastNote (kSlotB) == 60 && e.lastNote (kSlotA) == 59);
         CHECK (e.activeVoiceCount() == 2);                          // both slots share the one pool
-        CHECK (ScoutEngine::routesToWav (Focus::Split, 60, 59) == false && ScoutEngine::routesToWav (Focus::Split, 60, 60) == true);
-        // swapping the WAV kills only WAV voices and retires the old one exactly once
-        std::string we; auto w2 = WavSample::load (img.data(), img.size(), "R2_C4.wav", we);
-        e.setWav (w2.release());
-        CHECK (e.takeRetiredWav() == nullptr);
+        // TOGGLE: which slot sounds follows toggleOn
+        e.reset();
+        e.setKeyboard (KbMode::Toggle, 60, 0);
+        e.noteOn (64, 100); render (e, 64);
+        CHECK (e.lastNote (kSlotA) == 64 && e.lastNote (kSlotB) == 60);
+        e.setKeyboard (KbMode::Toggle, 60, 1);
+        e.noteOn (65, 100); render (e, 64);
+        CHECK (e.lastNote (kSlotB) == 65 && e.lastNote (kSlotA) == 64);
+        CHECK (ScoutEngine::routeSlot (KbMode::Split, 60, 0, 59, true, true) == kSlotA && ScoutEngine::routeSlot (KbMode::Split, 60, 0, 60, true, true) == kSlotB);
+        CHECK (ScoutEngine::routeSlot (KbMode::Toggle, 60, 1, 30, true, true) == kSlotB && ScoutEngine::routeSlot (KbMode::Toggle, 60, 0, 30, true, true) == kSlotA);
+        // swapping slot A kills only A's voices and retires the old one exactly once
+        e.reset(); e.setKeyboard (KbMode::Split, 60, 0);
+        e.noteOn (40, 100); e.noteOn (80, 100); render (e, 64);
+        CHECK (e.activeVoiceCount() == 2);
+        auto w2 = loadWav (rampImg, "A2_C4.wav");
+        e.setSlot (kSlotA, w2.release());
+        CHECK (e.takeRetired (kSlotA) == nullptr);
         render (e, 64);
-        CHECK (e.activeVoiceCount() == 1);                          // the SF2 voice survived
-        WavSample* old = e.takeRetiredWav();
-        CHECK (old != nullptr && old->fileName == "R_C4.wav");
+        CHECK (e.activeVoiceCount() == 1);                          // the B voice survived
+        WavSample* old = e.takeRetired (kSlotA);
+        CHECK (old != nullptr && old->fileName == "A_C4.wav");
         delete old;
-        CHECK (e.takeRetiredWav() == nullptr);
+        CHECK (e.takeRetired (kSlotA) == nullptr);
+        // noteOff releases the note on every slot; noteOffSlot only on one
+        e.reset(); e.setSlotFades (kSlotA, 0.0, 10.0); e.setSlotFades (kSlotB, 0.0, 10.0);
+        e.noteOnSlot (kSlotA, 50, 100); e.noteOnSlot (kSlotB, 50, 100); render (e, 64);
+        CHECK (e.activeVoiceCount() == 2);
+        e.noteOffSlot (kSlotB, 50); render (e, 900);
+        CHECK (e.activeVoiceCount() == 1 && e.lastPlayhead (kSlotA) >= 0.0);
+        e.noteOff (50); render (e, 900);
+        CHECK (e.activeVoiceCount() == 0);
     }
 
     SECTION ("wav-smpl");
     {
-        // stereo float source with an existing smpl + bext -> rewrite: metadata replaced, audio bytes identical
         WavSpec sp; sp.channels = 2; sp.bits = 32; sp.isFloat = true; sp.withSmpl = true; sp.loopStart = 5; sp.loopEnd = 9; sp.unity = 40;
         auto img = buildWav (sineF (6000, 30.0), sineF (6000, 50.0), sp);
         std::string we;
@@ -1015,7 +995,7 @@ int main (int argc, char** argv)
         if (w2 != nullptr)
         {
             CHECK (w2->hasSmpl && w2->loopStart == 123 && w2->loopEnd == 4567 && w2->loopType == 1);
-            CHECK (w2->rootKey == 61 && std::fabs (w2->fineCents + 20.0) < 1e-4);   // negative fine tune survives (stored as 60 + 80 cents)
+            CHECK (w2->rootKey == 61 && std::fabs (w2->fineCents + 20.0) < 1e-4);
             CHECK (w2->bextDescription == save.description);
             CHECK (w2->frames == 6000 && w2->isStereo() && w2->formatTag == 3 && w2->bitsPerSample == 32);
         }
@@ -1030,12 +1010,12 @@ int main (int argc, char** argv)
         CHECK (sm != nullptr && sl == 60);
         if (sm != nullptr)
         {
-            auto u32 = [] (const uint8_t* q) { return (uint32_t) q[0] | ((uint32_t) q[1] << 8) | ((uint32_t) q[2] << 16) | ((uint32_t) q[3] << 24); };
-            CHECK (u32 (sm + 12) == 60);                             // stored unity note (61 - 1 for the negative cents)
-            CHECK (u32 (sm + 16) == centsToPitchFraction (80.0));
-            CHECK (u32 (sm + 28) == 1 && u32 (sm + 40) == 1 && u32 (sm + 44) == 123 && u32 (sm + 48) == 4567 && u32 (sm + 56) == 0);
+            CHECK (rd32 (sm + 12) == 60);
+            CHECK (rd32 (sm + 16) == centsToPitchFraction (80.0));
+            CHECK (rd32 (sm + 28) == 1 && rd32 (sm + 40) == 1 && rd32 (sm + 44) == 123 && rd32 (sm + 48) == 4567 && rd32 (sm + 56) == 0);
         }
-        // exactly one smpl and one bext in the output
+        size_t bl; const uint8_t* bx = findChunk (out, "bext", bl);
+        CHECK (bx != nullptr && bl >= 602 && std::memcmp (bx + 256, "Scout v2", 8) == 0);   // Originator per spec
         int nSmpl = 0, nBext = 0;
         for (size_t at = 12; at + 8 <= out.size();)
         {
@@ -1045,18 +1025,14 @@ int main (int argc, char** argv)
             at += 8 + n + (n & 1);
         }
         CHECK (nSmpl == 1 && nBext == 1);
-        // RIFF size field is consistent
-        const uint32_t riffLen = (uint32_t) out[4] | ((uint32_t) out[5] << 8) | ((uint32_t) out[6] << 16) | ((uint32_t) out[7] << 24);
+        const uint32_t riffLen = rd32 (out.data() + 4);
         CHECK (riffLen + 8 == out.size());
-        // a second rewrite of the rewrite is byte-identical (idempotent)
         auto out2 = writeWav (*w2, save);
         CHECK (out2 == out);
-        // positive fine tune and a zero loop type round-trip too
         save.rootKey = 60; save.fineCents = 37.5; save.loopType = 0;
         auto out3 = writeWav (*w, save);
         auto w3 = WavSample::load (out3.data(), out3.size(), "x.wav", we);
         CHECK (w3 != nullptr && w3->rootKey == 60 && std::fabs (w3->fineCents - 37.5) < 1e-4 && w3->loopType == 0);
-        // export 16-bit mono: same frame count, -3 dB fold, markers preserved
         save.export16BitMono = true;
         auto out4 = writeWav (*w, save);
         auto w4 = WavSample::load (out4.data(), out4.size(), "x.wav", we);
@@ -1067,147 +1043,266 @@ int main (int argc, char** argv)
             const float want = (w->left[1000] + w->right[1000]) * 0.70710678f;
             CHECK (std::fabs (w4->left[1000] - want) < 1e-4f);
         }
-        // the writer clamps a loop that runs past the file
         save.export16BitMono = false; save.loopStart = 5990; save.loopEnd = 999999;
         auto out5 = writeWav (*w, save);
         auto w5 = WavSample::load (out5.data(), out5.size(), "x.wav", we);
         CHECK (w5 != nullptr && w5->loopStart == 5990 && w5->loopEnd == 5999);
     }
 
+    SECTION ("export");
+    {
+        // source: 22050 Hz stereo float, 6000 frames, loop [2000, 3999]
+        WavSpec sp; sp.channels = 2; sp.bits = 32; sp.isFloat = true; sp.rate = 22050;
+        auto img = buildWav (sineF (6000, 30.0), sineF (6000, 50.0, 0.25), sp);
+        std::string we;
+        auto w = WavSample::load (img.data(), img.size(), "src.wav", we);
+        CHECK (w != nullptr);
+        WavSaveSpec spec; spec.loopStart = 2000; spec.loopEnd = 3999; spec.loopType = 0; spec.rootKey = 60; spec.description = "range test";
+        ExportOptions opt; opt.originationDate = "2026-09-13"; opt.originationTime = "12:34:56";
+        // 1. EXPORT RANGE [1500, 4500): exactly 3000 frames, markers remapped (acceptance 5)
+        opt.hasRange = true; opt.rangeStart = 1500; opt.rangeEnd = 4500;
+        auto r1 = exportWav (*w, spec, opt);
+        CHECK (r1.error.empty() && r1.frames == 3000 && r1.loopKept && r1.loopStart == 500 && r1.loopEnd == 2499);
+        auto b1 = WavSample::load (r1.bytes.data(), r1.bytes.size(), "r1.wav", we);
+        CHECK (b1 != nullptr && b1->frames == 3000 && b1->hasSmpl && b1->loopStart == 500 && b1->loopEnd == 2499 && b1->rootKey == 60);
+        // a stereo source exports mono (fold rule): SUM at -3 dB
+        CHECK (b1 != nullptr && ! b1->isStereo() && b1->sampleRate == 22050 && b1->formatTag == 3 && b1->bitsPerSample == 32);
+        CHECK (b1 != nullptr && std::fabs (b1->left[100] - (w->left[1600] + w->right[1600]) * 0.70710678f) < 1e-5f);
+        size_t bl; const uint8_t* bx = findChunk (r1.bytes, "bext", bl);
+        CHECK (bx != nullptr && std::memcmp (bx, "range test", 10) == 0 && std::memcmp (bx + 256, "Scout v2", 8) == 0
+               && std::memcmp (bx + 320, "2026-09-13", 10) == 0 && std::memcmp (bx + 330, "12:34:56", 8) == 0);
+        // 2. markers outside the range: loop dropped, root kept, smpl carries no loop
+        opt.rangeStart = 2500; opt.rangeEnd = 3000;
+        auto r2 = exportWav (*w, spec, opt);
+        CHECK (r2.error.empty() && r2.frames == 500 && ! r2.loopKept);
+        auto b2 = WavSample::load (r2.bytes.data(), r2.bytes.size(), "r2.wav", we);
+        CHECK (b2 != nullptr && b2->frames == 500 && b2->rootKey == 60 && b2->rootFromFile);
+        size_t sl; const uint8_t* sm = findChunk (r2.bytes, "smpl", sl);
+        CHECK (sm != nullptr && sl == 36 && rd32 (sm + 28) == 0);
+        // an empty or reversed range is refused
+        opt.rangeStart = 3000; opt.rangeEnd = 3000;
+        CHECK (! exportWav (*w, spec, opt).error.empty());
+        opt.rangeStart = 100; opt.rangeEnd = 999999;                 // end clamped to the file
+        CHECK (exportWav (*w, spec, opt).frames == 5900);
+        // 3. L ONLY fold
+        opt.hasRange = false; opt.stereoFold = 1;
+        auto r3 = exportWav (*w, spec, opt);
+        auto b3 = WavSample::load (r3.bytes.data(), r3.bytes.size(), "r3.wav", we);
+        CHECK (b3 != nullptr && b3->frames == 6000 && ! b3->isStereo() && std::fabs (b3->left[777] - w->left[777]) < 1e-6f);
+        // 4. 16-bit / 44.1 kHz mono conversion: rate doubles, frames double, markers scale, sine survives the resampler
+        opt.stereoFold = 0; opt.convert16Bit441Mono = true;
+        auto r4 = exportWav (*w, spec, opt);
+        CHECK (r4.error.empty() && r4.sampleRate == 44100 && r4.bits == 16 && r4.channels == 1 && r4.frames == 12000);
+        CHECK (r4.loopKept && r4.loopStart == 4000 && r4.loopEnd == 7999);
+        auto b4 = WavSample::load (r4.bytes.data(), r4.bytes.size(), "r4.wav", we);
+        CHECK (b4 != nullptr && b4->formatTag == 1 && b4->bitsPerSample == 16 && b4->sampleRate == 44100 && b4->frames == 12000);
+        CHECK (b4 != nullptr && b4->loopStart == 4000 && b4->loopEnd == 7999);
+        if (b4 != nullptr)
+        {
+            // the 30-sample period at 22050 becomes 60 samples at 44100 (both channels folded: 0.5*sin(30) + 0.25*sin(50))
+            std::vector<float> mono (b4->left.begin(), b4->left.end());
+            // isolate the 60-sample component by checking the left channel's dominant period via zero crossings of a high-passed view
+            double peak = 0.0; for (size_t i = 1000; i < 11000; ++i) peak = std::max (peak, (double) std::fabs (mono[i]));
+            CHECK (peak > 0.3 && peak < 0.6);
+            bool fin = true; for (float v : mono) fin = fin && std::isfinite (v);
+            CHECK (fin);
+        }
+        // 5. native export of a decoded module sample is a plain 16-bit mono file with its loop
+        auto dz = bank->decodeZone (*z0);
+        WavSaveSpec zs; zs.loopStart = dz->loopStart; zs.loopEnd = dz->loopEnd; zs.rootKey = dz->rootKey;
+        ExportOptions nat;
+        auto r5 = exportWav (*dz, zs, nat);
+        auto b5 = WavSample::load (r5.bytes.data(), r5.bytes.size(), "z.wav", we);
+        CHECK (b5 != nullptr && b5->frames == 4000 && b5->bitsPerSample == 16 && ! b5->isStereo() && b5->loopStart == 1000 && b5->loopEnd == 2999);
+        CHECK (b5 != nullptr && std::fabs (b5->left[1234] - dz->left[1234]) < 1e-4f);
+        // 6. an empty sample is refused
+        WavSample empty;
+        CHECK (! exportWav (empty, zs, nat).error.empty());
+    }
+
     SECTION ("markers");
     {
-        // hit-test: nearer line wins; strict mode needs +-grab
         CHECK (pickMarker (100.0, 500.0, 104.0, 8.0, true)  == Marker::Start);
         CHECK (pickMarker (100.0, 500.0, 507.0, 8.0, true)  == Marker::End);
-        CHECK (pickMarker (100.0, 500.0, 300.0, 8.0, true)  == Marker::None);      // nothing within 8 px
-        CHECK (pickMarker (100.0, 500.0, 300.0, 8.0, false) == Marker::Start);     // click-to-place: nearer (tie -> start)
+        CHECK (pickMarker (100.0, 500.0, 300.0, 8.0, true)  == Marker::None);
+        CHECK (pickMarker (100.0, 500.0, 300.0, 8.0, false) == Marker::Start);
         CHECK (pickMarker (100.0, 500.0, 301.0, 8.0, false) == Marker::End);
-        CHECK (pickMarker (0.0, 888.0, 3.0, 8.0, true) == Marker::Start);          // whole-file default: edge lines still grabbable
+        CHECK (pickMarker (0.0, 888.0, 3.0, 8.0, true) == Marker::Start);
         CHECK (pickMarker (0.0, 888.0, 884.0, 8.0, true) == Marker::End);
-        // drag math: END's line is one past the last included sample
         int64_t s = 100, e = 200;
         applyMarkerDrag (Marker::End, 301, s, e, 999);   CHECK (s == 100 && e == 300);
         applyMarkerDrag (Marker::Start, 150, s, e, 999); CHECK (s == 150 && e == 300);
-        applyMarkerDrag (Marker::Start, 900, s, e, 999); CHECK (s == 300 && e == 300);   // past END: clamped to it
-        applyMarkerDrag (Marker::End, 50, s, e, 999);    CHECK (s == 300 && e == 300);   // before START: clamped to it
-        applyMarkerDrag (Marker::End, 5000, s, e, 999);  CHECK (e == 999);               // past the file: last frame
+        applyMarkerDrag (Marker::Start, 900, s, e, 999); CHECK (s == 300 && e == 300);
+        applyMarkerDrag (Marker::End, 50, s, e, 999);    CHECK (s == 300 && e == 300);
+        applyMarkerDrag (Marker::End, 5000, s, e, 999);  CHECK (e == 999);
         applyMarkerDrag (Marker::Start, -7, s, e, 999);  CHECK (s == 0);
-        applyMarkerDrag (Marker::None, 5, s, e, 999);    CHECK (s == 0 && e == 999);     // no marker: no-op
-        applyMarkerDrag (Marker::End, 1000, s, e, 999);  CHECK (e == 999);               // the END line at frames == lastFrame+1 includes the last sample
-        int64_t s2 = 5, e2 = 5; applyMarkerDrag (Marker::End, 5, s2, e2, 9); CHECK (s2 == 5 && e2 == 5);   // one-frame loop stays valid
-        applyMarkerDrag (Marker::End, 0, s2, e2, -1); CHECK (s2 == 5 && e2 == 5);        // empty file: no-op
-        // PLAY-style forced W note: plays the WAV even in R focus, and note-off releases it
+        applyMarkerDrag (Marker::None, 5, s, e, 999);    CHECK (s == 0 && e == 999);
+        applyMarkerDrag (Marker::End, 1000, s, e, 999);  CHECK (e == 999);
+        int64_t s2 = 5, e2 = 5; applyMarkerDrag (Marker::End, 5, s2, e2, 9); CHECK (s2 == 5 && e2 == 5);
+        applyMarkerDrag (Marker::End, 0, s2, e2, -1); CHECK (s2 == 5 && e2 == 5);
+        // PLAY-style audition: the Cur slot sounds regardless of the keyboard routing, note-off releases it
         WavSpec sp; auto img = buildWav (indexRamp (1000), {}, sp);
-        ScoutEngine en; makeEngine (en, img, "R_C4.wav");
-        en.setFocus (Focus::R, 60);
-        en.setWavLoop (100, 200, WavLoopMode::Forward);
-        en.noteOnWav (48, 100);
+        ScoutEngine en; makeEngine (en, img, "A_C4.wav");
+        install (en, kSlotCur, loadWav (img, "CUR_C4.wav"), LoopKind::Forward);
+        en.setSlotLoop (kSlotCur, 100, 200, LoopKind::Forward);
+        en.setKeyboard (KbMode::A, 60, 0);
+        en.noteOnSlot (kSlotCur, 48, 100);
         render (en, 64);
-        CHECK (en.lastWavNote() == 48 && en.lastWavPlayhead() >= 0.0 && en.activeVoiceCount() == 1);
-        en.noteOff (48);
+        CHECK (en.lastNote (kSlotCur) == 48 && en.lastPlayhead (kSlotCur) >= 0.0 && en.activeVoiceCount() == 1 && en.lastNote (kSlotA) == -1);
+        en.noteOffSlot (kSlotCur, 48);
         render (en, 8820);
         CHECK (en.activeVoiceCount() == 0);
     }
 
-    SECTION ("focus-fallback");
+    SECTION ("routing-fallback");
     {
         // pure routing with empty slots: an empty target falls back to the loaded slot
-        CHECK (ScoutEngine::routesToWav (Focus::W, 60, 72, true, false) == false);      // WAV chosen, none loaded -> SF2
-        CHECK (ScoutEngine::routesToWav (Focus::Split, 60, 72, true, false) == false);  // SPLIT upper half, no WAV -> SF2
-        CHECK (ScoutEngine::routesToWav (Focus::R, 60, 72, false, true) == true);       // SF2 chosen, none loaded -> WAV
-        CHECK (ScoutEngine::routesToWav (Focus::Split, 60, 40, false, true) == true);   // SPLIT lower half, no SF2 -> WAV
-        CHECK (ScoutEngine::routesToWav (Focus::W, 60, 72, true, true) == true);        // both loaded: honoured
-        CHECK (ScoutEngine::routesToWav (Focus::Split, 60, 59, true, true) == false && ScoutEngine::routesToWav (Focus::Split, 60, 60, true, true) == true);
-        CHECK (ScoutEngine::routesToWav (Focus::W, 60, 72, false, false) == false);     // nothing loaded: nothing to do, no crash
-        // engine-level: focus W with only the SF2 loaded still plays the SF2 (the 0.3.0 "keyboard went silent" case)
-        std::string be; auto b = SoundFontBank::load (file.data(), file.size(), be);
-        ScoutEngine e; e.prepare (44100.0); e.setBank (b.release()); e.setPreset (0);
-        e.setFocus (Focus::W, 60);
-        e.noteOn (60, 100); render (e, 64);
-        CHECK (e.activeVoiceCount() == 1 && e.lastNote().note == 60 && e.lastWavNote() == -1);
-        // ...and once a WAV lands, the same focus routes to it
+        CHECK (ScoutEngine::routeSlot (KbMode::A, 60, 0, 72, false, true) == kSlotB);        // A chosen, none loaded -> B
+        CHECK (ScoutEngine::routeSlot (KbMode::B, 60, 0, 72, true, false) == kSlotA);        // B chosen, none loaded -> A
+        CHECK (ScoutEngine::routeSlot (KbMode::Split, 60, 0, 72, true, false) == kSlotA);    // SPLIT upper half, no B -> A
+        CHECK (ScoutEngine::routeSlot (KbMode::Split, 60, 0, 40, false, true) == kSlotB);    // SPLIT lower half, no A -> B
+        CHECK (ScoutEngine::routeSlot (KbMode::Toggle, 60, 1, 40, true, false) == kSlotA);   // TOGGLE on B, no B -> A
+        CHECK (ScoutEngine::routeSlot (KbMode::A, 60, 0, 72, true, true) == kSlotA);         // both loaded: honoured
+        CHECK (ScoutEngine::routeSlot (KbMode::A, 60, 0, 72, false, false) == -1);           // nothing loaded: nothing to do
+        // engine-level: routing B with only A loaded still plays A (the "keyboard went silent" case)
         WavSpec sp; auto img = buildWav (indexRamp (1000), {}, sp);
-        std::string we; auto w = WavSample::load (img.data(), img.size(), "R_C4.wav", we);
-        e.setWav (w.release()); e.setWavLoop (100, 200, WavLoopMode::Forward); e.setWavFades (0.0, 80.0);
+        ScoutEngine e; e.prepare (44100.0);
+        install (e, kSlotA, loadWav (img, "A_C4.wav"), LoopKind::Forward);
+        e.setKeyboard (KbMode::B, 60, 0);
+        e.noteOn (60, 100); render (e, 64);
+        CHECK (e.activeVoiceCount() == 1 && e.lastNote (kSlotA) == 60 && e.lastNote (kSlotB) == -1);
+        // ...and once B lands, the same routing goes to it
+        install (e, kSlotB, loadWav (img, "B_C4.wav"), LoopKind::Forward);
         e.noteOn (72, 100); render (e, 64);
-        CHECK (e.lastWavNote() == 72 && e.activeVoiceCount() == 2);
-        // R focus with the WAV only: WAV plays
+        CHECK (e.lastNote (kSlotB) == 72 && e.activeVoiceCount() == 2);
+        // nothing loaded at all: a note is a no-op, no crash
         ScoutEngine e2; e2.prepare (44100.0);
-        auto w2 = WavSample::load (img.data(), img.size(), "R_C4.wav", we);
-        e2.setWav (w2.release()); e2.setFocus (Focus::R, 60);
-        e2.noteOn (60, 100); render (e2, 64);
-        CHECK (e2.lastWavNote() == 60 && e2.activeVoiceCount() == 1);
+        e2.setKeyboard (KbMode::Split, 60, 0);
+        e2.noteOn (60, 100); e2.noteOnSlot (kSlotCur, 60, 100); auto out = render (e2, 256);
+        CHECK (e2.activeVoiceCount() == 0);
+        float peak = 0.0f; for (float v : out) peak = std::max (peak, std::fabs (v));
+        CHECK (peak == 0.0f);
     }
 
     SECTION ("unload");
     {
         WavSpec sp; auto img = buildWav (indexRamp (1000), {}, sp);
-        ScoutEngine e; makeEngine (e, img, "R_C4.wav");
-        e.setWavLoop (100, 200, WavLoopMode::Forward);
-        e.setFocus (Focus::Split, 60);
+        ScoutEngine e; makeEngine (e, img, "A_C4.wav");
+        install (e, kSlotB, loadWav (img, "B_C4.wav"), LoopKind::Forward);
+        e.setSlotLoop (kSlotA, 100, 200, LoopKind::Forward);
+        e.setSlotLoop (kSlotB, 100, 200, LoopKind::Forward);
+        e.setKeyboard (KbMode::Split, 60, 0);
         e.noteOn (48, 100); e.noteOn (72, 100); render (e, 64);
         CHECK (e.activeVoiceCount() == 2);
-        // clear the bank: only the SF2 voice dies, the bank is retired exactly once, the WAV keeps sounding
-        const SoundFontBank* bankPtr = e.requestedBank();
-        CHECK (bankPtr != nullptr);
-        e.clearBank();
-        CHECK (e.requestedBank() == nullptr);
-        CHECK (e.takeRetiredBank() == nullptr);                // not until the audio thread runs
+        // clear A: only A's voice dies, A is retired exactly once, B keeps sounding
+        const WavSample* aPtr = e.requested (kSlotA);
+        CHECK (aPtr != nullptr);
+        e.clearSlot (kSlotA);
+        CHECK (e.requested (kSlotA) == nullptr);
+        CHECK (e.takeRetired (kSlotA) == nullptr);             // not until the audio thread runs
         auto out = render (e, 64);
-        CHECK (e.activeVoiceCount() == 1 && e.lastWavPlayhead() >= 0.0 && e.lastPlayhead() < 0.0);
-        SoundFontBank* rb = e.takeRetiredBank();
-        CHECK (rb == bankPtr);
-        delete rb;
-        CHECK (e.takeRetiredBank() == nullptr);
+        CHECK (e.activeVoiceCount() == 1 && e.lastPlayhead (kSlotB) >= 0.0 && e.lastPlayhead (kSlotA) < 0.0 && e.lastNote (kSlotA) == -1);
+        WavSample* ra = e.takeRetired (kSlotA);
+        CHECK (ra == aPtr);
+        delete ra;
+        CHECK (e.takeRetired (kSlotA) == nullptr);
         bool fin = true; for (float v : out) fin = fin && std::isfinite (v);
         CHECK (fin);
-        // notes aimed at the empty R slot now fall back to the WAV; nothing crashes
+        // notes aimed at the empty A now fall back to B; nothing crashes
         e.noteOn (40, 100); render (e, 64);
-        CHECK (e.lastWavNote() == 40 && e.activeVoiceCount() == 2);
-        // clear the WAV too: everything silent, retiree collected once, further notes are no-ops
-        e.clearWav();
+        CHECK (e.lastNote (kSlotB) == 40 && e.activeVoiceCount() == 2);
+        // clear B too: everything silent, retiree collected once, further notes are no-ops
+        e.clearSlot (kSlotB);
         render (e, 64);
-        CHECK (e.activeVoiceCount() == 0 && e.lastWavPlayhead() < 0.0 && e.lastWavNote() == -1);
-        WavSample* rw = e.takeRetiredWav();
-        CHECK (rw != nullptr && rw->fileName == "R_C4.wav");
-        delete rw;
-        CHECK (e.takeRetiredWav() == nullptr);
-        e.noteOn (60, 100); e.noteOnWav (60, 100); out = render (e, 256);
+        CHECK (e.activeVoiceCount() == 0 && e.lastPlayhead (kSlotB) < 0.0 && e.lastNote (kSlotB) == -1);
+        WavSample* rb = e.takeRetired (kSlotB);
+        CHECK (rb != nullptr && rb->fileName == "B_C4.wav");
+        delete rb;
+        CHECK (e.takeRetired (kSlotB) == nullptr);
+        e.noteOn (60, 100); e.noteOnSlot (kSlotB, 60, 100); out = render (e, 256);
         CHECK (e.activeVoiceCount() == 0);
         float peak = 0.0f; for (float v : out) peak = std::max (peak, std::fabs (v));
         CHECK (peak == 0.0f);
         // swap safety: clear while a retiree is still parked -> the clear waits, then completes once collected
-        std::string b1e, b2e;
-        auto b1 = SoundFontBank::load (file.data(), file.size(), b1e);
-        auto b2 = SoundFontBank::load (file.data(), file.size(), b2e);
-        e.setBank (b1.release()); render (e, 64);
-        e.setBank (b2.release()); render (e, 64);              // b1 parked in retired
-        e.setFocus (Focus::R, 60); e.noteOn (60, 100); render (e, 64);
+        auto b1 = loadWav (img, "B1_C4.wav"), b2 = loadWav (img, "B2_C4.wav");
+        e.setSlot (kSlotA, b1.release()); render (e, 64);
+        e.setSlot (kSlotA, b2.release()); render (e, 64);      // b1 parked in retired
+        e.setKeyboard (KbMode::A, 60, 0); e.noteOn (60, 100); render (e, 64);
         CHECK (e.activeVoiceCount() == 1);
-        e.clearBank();
+        e.clearSlot (kSlotA);
         render (e, 64);                                        // retiree slot busy: clear deferred, b2 still plays
         CHECK (e.activeVoiceCount() == 1);
-        delete e.takeRetiredBank();                            // collector catches up (b1)
+        delete e.takeRetired (kSlotA);                         // collector catches up (b1)
         render (e, 64);
         CHECK (e.activeVoiceCount() == 0);
-        SoundFontBank* rb2 = e.takeRetiredBank();
+        WavSample* rb2 = e.takeRetired (kSlotA);
         CHECK (rb2 != nullptr);
         delete rb2;
-        CHECK (e.takeRetiredBank() == nullptr);
-        // clear with a bank pending (never reached the audio thread): pending is dropped, no leak/double free
-        std::string b3e; auto b3 = SoundFontBank::load (file.data(), file.size(), b3e);
-        e.setBank (b3.release());
-        e.clearBank();
+        CHECK (e.takeRetired (kSlotA) == nullptr);
+        // clear with a sample pending (never reached the audio thread): pending is dropped, no leak/double free
+        auto b3 = loadWav (img, "B3_C4.wav");
+        WavSample* b3raw = b3.get();
+        e.setSlot (kSlotA, b3.release());
+        WavSample* dropped = e.clearSlot (kSlotA);
+        CHECK (dropped == b3raw);
+        delete dropped;
         render (e, 64);
-        CHECK (e.takeRetiredBank() == nullptr && e.requestedBank() == nullptr);
+        CHECK (e.takeRetired (kSlotA) == nullptr && e.requested (kSlotA) == nullptr);
         e.noteOn (60, 100); render (e, 64);
         CHECK (e.activeVoiceCount() == 0);
     }
 
+    SECTION ("assists");
+    {
+        // a 441 Hz sine (period 100 at 44.1 kHz), 4000 frames
+        WavSpec sp;
+        auto img = buildWav (sineF (4000, 100.0), {}, sp);
+        auto w = loadWav (img, "sine.wav");
+        // LOUDNESS: RMS of a 0.5 sine = 0.3536 -> -9.03 dB
+        CHECK (std::fabs (loopRmsDb (*w, 0, 1999) - (-9.03)) < 0.05);
+        CHECK (loopRmsDb (*w, 500, 400) == -120.0 && loopRmsDb (*w, 0, 99999) == -120.0);
+        // AUTO-DETECT ROOT: 441 Hz -> A4 +3.9 c
+        auto root = autoDetectRoot (*w, 0, 1999);
+        CHECK (root.found && std::fabs (root.hz - 441.0) < 2.0 && root.note == 69 && std::fabs (root.cents - 3.93) < 6.0 && root.confidence > 0.9);
+        // an octave-ambiguous tone (period 200 with a strong 2nd harmonic) picks the fundamental
+        std::vector<float> h (8000);
+        for (int i = 0; i < 8000; ++i) h[(size_t) i] = (float) (0.3 * std::sin (2.0 * 3.14159265358979 * i / 200.0) + 0.3 * std::sin (2.0 * 3.14159265358979 * i / 100.0));
+        auto hw = loadWav (buildWav (h, {}, sp), "harm.wav");
+        auto hr = autoDetectRoot (*hw, 0, 7999);
+        CHECK (hr.found && std::fabs (hr.hz - 220.5) < 1.5);
+        // silence / tiny input: not found, no crash
+        auto sw = loadWav (buildWav (std::vector<float> (4000, 0.0f), {}, sp), "silence.wav");
+        CHECK (! autoDetectRoot (*sw, 0, 3999).found);
+        WavSample tiny; tiny.frames = 8; tiny.left.assign (8, 0.1f); tiny.sampleRate = 44100;
+        CHECK (! autoDetectRoot (tiny, 0, 7).found && ! suggestSplice (tiny, 0, 7).found && loopRmsDb (tiny, 0, 7) < 0.0);
+        // PERIODS: loop [0, 1999] at the detected root = 20.00 periods
+        const double per = loopPeriods (2000, 44100.0, root.note, root.cents);
+        CHECK (std::fabs (per - 20.0) < 0.05 && periodsNearInteger (per));
+        CHECK (! periodsNearInteger (loopPeriods (2050, 44100.0, root.note, root.cents)));
+        // CLICK METER: a seam at a zero crossing on the period grid is clean, a seam mid-cycle is not
+        const double good = clickRatio (*w, 0, 1999, LoopKind::Forward);
+        const double bad  = clickRatio (*w, 0, 1975, LoopKind::Forward);
+        CHECK (good <= 1.05 && bad > 2.0);
+        CHECK (clickRatio (*w, 0, 1975, LoopKind::Off) == 0.0);
+        const double pp = clickRatio (*w, 0, 1999, LoopKind::PingPong);
+        CHECK (pp >= 0.0 && std::isfinite (pp));
+        // SUGGEST: from the bad END, the search lands on a period-aligned END (seam continuous)
+        auto sg = suggestSplice (*w, 0, 1975);
+        CHECK (sg.found && sg.candidates > 100);
+        if (sg.found)
+        {
+            const float xe = w->left[sg.loopEnd], xe1 = w->left[sg.loopEnd - 1];
+            CHECK (std::fabs (w->left[0] - (xe + (xe - xe1))) < 0.01f);      // value continuity across the seam
+            CHECK (clickRatio (*w, 0, sg.loopEnd, LoopKind::Forward) <= 1.05);
+            CHECK ((int) sg.loopEnd > 1975 - 8820 && (int) sg.loopEnd < 1975 + 8820);      // within +-200 ms
+        }
+        // stereo input goes through the mono mix
+        WavSpec st; st.channels = 2;
+        auto stw = loadWav (buildWav (sineF (4000, 100.0), sineF (4000, 100.0), st), "st.wav");
+        CHECK (std::fabs (loopRmsDb (*stw, 0, 1999) - (-9.03)) < 0.1);
+    }
+
     // ------------------------------------------------------------ v2: modules
-    // A structurally complete 4-channel ProTracker MOD built in memory:
-    // sample 1 "loop_c" = 1000 frames of an index ramp with a loop at
-    // [200, 400), sample 2 "shot" = 300 frames, no loop, other slots empty.
     auto buildMod = [] (bool withLoop) -> std::vector<uint8_t>
     {
         std::vector<uint8_t> m;
@@ -1221,12 +1316,12 @@ int main (int argc, char** argv)
             else if (i == 1) { fixed ("shot", 22);   be16 (150); u8 (0); u8 (48); be16 (0); be16 (1); }
             else             { fixed ("", 22);       be16 (0);   u8 (0); u8 (0);  be16 (0); be16 (1); }
         }
-        u8 (1); u8 (127);                                  // song length, restart
-        for (int i = 0; i < 128; ++i) u8 (0);             // orders: pattern 0 only
+        u8 (1); u8 (127);
+        for (int i = 0; i < 128; ++i) u8 (0);
         fixed ("M.K.", 4);
-        for (int i = 0; i < 1024; ++i) u8 (0);            // one empty pattern
-        for (int i = 0; i < 1000; ++i) u8 ((int8_t) ((i % 200) - 100));   // sample 1: signed 8-bit ramp
-        for (int i = 0; i < 300; ++i) u8 ((int8_t) (i / 3 - 50));         // sample 2
+        for (int i = 0; i < 1024; ++i) u8 (0);
+        for (int i = 0; i < 1000; ++i) u8 ((int8_t) ((i % 200) - 100));
+        for (int i = 0; i < 300; ++i) u8 ((int8_t) (i / 3 - 50));
         return m;
     };
 
@@ -1244,11 +1339,10 @@ int main (int argc, char** argv)
             const auto& s1 = mod->samples()[0];
             CHECK (s1.index == 1 && s1.name == "loop_c" && s1.frames == 1000 && s1.bits == 8 && s1.channels == 1);
             CHECK (s1.hasLoop && ! s1.pingPong && s1.loopStart == 200 && s1.loopEnd == 400 && ! s1.hasSustain);
-            CHECK (s1.sampleRate == 8287);                                    // PAL Amiga C-5 at finetune 0
+            CHECK (s1.sampleRate == 8287);
             const auto& s2 = mod->samples()[1];
             CHECK (s2.name == "shot" && s2.frames == 300 && ! s2.hasLoop);
             CHECK (mod->samples()[2].isEmpty());
-            // decode -> WavSample carrying the module's loop, inclusive end, root 60 at the C-5 rate
             std::string derr;
             auto w = mod->decode (1, derr);
             CHECK (w != nullptr);
@@ -1260,7 +1354,6 @@ int main (int argc, char** argv)
                 CHECK (std::fabs (w->left[0] * 128.0f - (-100.0f)) < 1e-3f && std::fabs (w->left[150] * 128.0f - 50.0f) < 1e-3f);
                 CHECK (w->chunks.size() == 2);
                 CHECK (w->bextDescription.find ("harness.mod") != std::string::npos && w->bextDescription.find ("loop=200-400") != std::string::npos);
-                // the bridge round-trips through the exporter: smpl written, data byte-identical, reload agrees
                 WavSaveSpec spec; spec.loopStart = w->loopStart; spec.loopEnd = w->loopEnd; spec.loopType = 0; spec.rootKey = 60;
                 auto bytes = writeWav (*w, spec);
                 std::string rerr;
@@ -1271,23 +1364,20 @@ int main (int argc, char** argv)
             }
             auto w2 = mod->decode (2, derr);
             CHECK (w2 != nullptr && ! w2->hasSmpl && w2->loopStart == 0 && w2->loopEnd == 299);
-            CHECK (mod->decode (3, derr) == nullptr && ! derr.empty());     // empty slot
+            CHECK (mod->decode (3, derr) == nullptr && ! derr.empty());
             CHECK (mod->decode (0, derr) == nullptr && mod->decode (99, derr) == nullptr);
         }
-        // a MOD whose sample 1 has no loop -> whole-file default markers, hasSmpl false
         auto img2 = buildMod (false);
         auto mod2 = ModuleSource::load (img2.data(), img2.size(), "noloop.mod", merr);
         CHECK (mod2 != nullptr && ! mod2->samples()[0].hasLoop);
         std::string d2;
         auto w3 = mod2 != nullptr ? mod2->decode (1, d2) : nullptr;
         CHECK (w3 != nullptr && ! w3->hasSmpl && w3->loopEnd == 999);
-        // extension routing
         CHECK (ModuleSource::isSupportedExtension ("mod") && ModuleSource::isSupportedExtension (".XM")
                && ModuleSource::isSupportedExtension ("it") && ModuleSource::isSupportedExtension ("s3m")
                && ! ModuleSource::isSupportedExtension ("wav") && ! ModuleSource::isSupportedExtension ("sf2")
                && ! ModuleSource::isSupportedExtension (""));
         CHECK (ModuleSource::supportedExtensions().size() > 20);
-        // malformed input: error string, never a crash
         CHECK (ModuleSource::load (nullptr, 0, "x", merr) == nullptr && ! merr.empty());
         const char junk[] = "this is not a module at all, just some bytes of text that go nowhere";
         CHECK (ModuleSource::load (junk, sizeof (junk), "x.mod", merr) == nullptr && ! merr.empty());
@@ -1299,14 +1389,14 @@ int main (int argc, char** argv)
             if (t != nullptr) { std::string de; (void) t->decode (1, de); (void) t->decode (2, de); }
         }
         CHECK (true);
-        std::vector<uint8_t> lie = img; lie[42] = 0xff; lie[43] = 0xff;     // sample 1 claims 65535 words
+        std::vector<uint8_t> lie = img; lie[42] = 0xff; lie[43] = 0xff;
         { std::string le; auto t = ModuleSource::load (lie.data(), lie.size(), "lie.mod", le); if (t != nullptr) { std::string de; (void) t->decode (1, de); } }
         CHECK (true);
     }
 
     SECTION ("mod-play");
     {
-        // a decoded module sample plays in Slot W at its C-5 rate on note 60
+        // a decoded module sample plays at its C-5 rate on note 60
         auto img = buildMod (true);
         std::string merr;
         auto mod = ModuleSource::load (img.data(), img.size(), "harness.mod", merr);
@@ -1316,26 +1406,20 @@ int main (int argc, char** argv)
         if (w != nullptr)
         {
             ScoutEngine e; e.prepare (44100.0);
-            e.setWavLoop (w->loopStart, w->loopEnd, WavLoopMode::Forward);
-            e.setWavTuning (60, 0.0);
-            e.setWavFades (0.0, 80.0);
-            e.setFocus (Focus::W, 60);
-            e.setWav (w.release());
-            render (e, 64); e.reset();
+            install (e, kSlotA, std::move (w), LoopKind::Forward);
+            e.setKeyboard (KbMode::A, 60, 0);
             e.noteOn (60, 100);
             render (e, 1000);                                                 // ~22 ms, still before loopStart
             const double expect = 1000.0 * 8287.0 / 44100.0;                  // ~188 frames in
             CHECK (e.activeVoiceCount() == 1);
-            CHECK (std::fabs (e.lastWavPlayhead() - expect) < 2.0);
-            // keep holding: the loop [200,399] sustains
+            CHECK (std::fabs (e.lastPlayhead (kSlotA) - expect) < 2.0);
             auto out = render (e, 44100);
-            CHECK (e.activeVoiceCount() == 1 && e.lastWavPlayhead() >= 200.0 && e.lastWavPlayhead() <= 400.0);
+            CHECK (e.activeVoiceCount() == 1 && e.lastPlayhead (kSlotA) >= 200.0 && e.lastPlayhead (kSlotA) <= 400.0);
             float peak = 0.0f; for (float v : out) peak = std::max (peak, std::fabs (v));
             CHECK (peak > 0.05f);
             e.noteOff (60); render (e, 8820);
             CHECK (e.activeVoiceCount() == 0);
-            delete e.takeRetiredWav();
-            e.clearWav(); render (e, 64); delete e.takeRetiredWav();
+            e.clearSlot (kSlotA); render (e, 64); delete e.takeRetired (kSlotA);
         }
     }
 

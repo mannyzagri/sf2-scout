@@ -96,7 +96,7 @@ C4). Where this layer conflicts with an earlier phase plan, this layer wins.
 | Declaration | Value | Why |
 |---|---|---|
 | Era-math regime | **modern / n.a.** — the tool is a sample read-pointer with linear interpolation; no synthesis layer exists to be era-faithful about. `vintage-dsp` does NOT apply. | docs/DSP.md "What to IGNORE" |
-| GUI type | **fixed** — one 920-px-wide plain-JUCE face, not resizable. | handoff README "No responsive behaviour needed — fixed-size plugin window" |
+| GUI type | **fixed layout, scalable window** (since handoff v2, 2026-09-13): a 1200 × 840 plain-JUCE canvas, scaled uniformly 0.75–1.5 with a fixed aspect (`setResizable` + `setFixedAspectRatio` + `AffineTransform::scale`). The kickoff "fixed, not resizable" declaration is superseded by the handoff; the operator has not ruled on it (OPEN QUESTION 11). | handoff v2 README "CHANGES FROM V1" 1 |
 | GUI technology | **plain JUCE Components — NOT the house WebView pattern.** Recorded deviation D-1. | docs/DSP.md "Tech approach": *"No editor framework beyond stock JUCE components … WebView GUI NOT required"*; handoff README "About the Design Files" says the same |
 | JUCE acquisition | FetchContent pinned to 8.0.4, satisfied offline by `-DFETCHCONTENT_SOURCE_DIR_JUCE=C:/rhino/deps/JUCE` (rhino pattern). | no network dependency at configure |
 | SF2 parsing | **TinySoundFont v0.9** (MIT), vendored at `third_party/tsf/tsf.h` + `LICENSE` with a 3-line marked patch (D-6). Used for parsing only; playback is our own (spec "Tech approach"). | docs/DSP.md |
@@ -122,7 +122,7 @@ C4). Where this layer conflicts with an earlier phase plan, this layer wins.
 | `SSOT.md` | which file is canon per fact domain (unsigned until the operator signs) |
 | `docs/SCOUT_v2_SPEC.md` | **behaviour canon since 2026-09-12**: sources, playback, editor, export, acceptance, build order. Received verbatim from the operator. |
 | `docs/DSP.md` | SUPERSEDED by v2 (kept verbatim: the 2026-08-29 auditioner spec). Still the reference for SF2-side details v2 does not restate (play modes, what to ignore from the SF2 spec). |
-| `docs/handoff-gui-v1/README.md` | appearance: every colour, size, font, spacing, interaction of the face. Verbatim from the gui-claude bundle (2026-08-29). `docs/handoff-gui-v1/handoff-manifest.json` is the machine-checked part (**derived** by vm-claude — a native one is requested for v2). |
+| `docs/handoff-gui-v2/README.md` | appearance since 0.6.0: every colour, size, font, spacing, state and interaction of the v2 face (1200 × 840). Verbatim from the gui-claude bundle `Plugin GUI.zip` (2026-09-13); `SF2 Scout v2.dc.html` is its prototype (design of record for interactions), `handoff-manifest.json` its native manifest (shape re-emit asked — mailbox `VM-HANDOFF-V2-LINT-20260913.md`). `docs/handoff-gui-v1/` is history. |
 | `PROJECT-NOTES.md` STATE | current state — deployed build, validator, params, pending |
 | `breakpoint.md` | session-end snapshot, subordinate to STATE |
 | `CHANGELOG.md` | history; item IDs `SC-nnn` |
@@ -140,13 +140,18 @@ C4). Where this layer conflicts with an earlier phase plan, this layer wins.
 2. **Parameter IDs are a public API.** `masterGain`, `mode`, `midiChannel` —
    append-only, never rename/reorder (`Source/PluginProcessor.h` `ParamId`).
    Encoding at the decoder: float normalised 0..1; choice = int index.
-3. **Audio thread**: no allocation/locks/logging. Bank swap = atomic pointer
-   handoff (`ScoutEngine::setBank` / `takeRetiredBank`); the audio thread
-   never frees. UI audition notes travel through an `AbstractFifo`.
-4. **The engine is JUCE-free** (`Source/engine/`) and is proven by the cl.exe
-   harness `tests/test_engine.cpp` BEFORE any plugin build. It builds a
-   structurally complete SF2 in memory, so no third-party SoundFont is ever
-   needed or committed.
+3. **Audio thread**: no allocation/locks/logging. Every sample reaches the
+   engine as a decoded `WavSample` in one of three SLOTS (A, B, Cur); a slot
+   swap is an atomic pointer handoff (`ScoutEngine::setSlot` /
+   `takeRetired`), the audio thread never frees, and a sample it never
+   played is handed back to the caller. The processor keeps shared samples
+   alive (`engineHeld_`) until every slot retired them. UI audition notes
+   travel through an `AbstractFifo`.
+4. **The engine is JUCE-free** (`Source/engine/`, incl. `Assists`) and is
+   proven by the harness `tests/test_engine.cpp` BEFORE any plugin build
+   (347 checks, 27 sections at 0.6.0). It builds a structurally complete
+   SF2 / WAV / MOD in memory, so no third-party material is ever needed or
+   committed.
 5. **GUI ROLE BOUNDARY (CLAUDE-WORKFLOW.md §4.0)** applies unchanged even
    though the face is plain JUCE: the handoff README is the design; C++ only
    recreates it with the given numbers and wires it. Anything the handoff does
@@ -186,10 +191,10 @@ v2 build order (docs/SCOUT_v2_SPEC.md "Build order") — supersedes the table ab
 
 | v2 step | Scope | Gate | Status |
 |---|---|---|---|
-| 1 | Sources + playback: WAV / SF2 / module load, sample list, MIDI play with own loops | v2 acceptance 1 (GM SF2, .it with ping-pong, .xm, .mod, 32f WAV all list, play in tune, honour loops, no crash on junk) | **0.5.0 code complete**: harness `[mod-load]` `[mod-play]`; probe-verified on real MOD/XM/IT (ping-pong + IT 2.14 compressed); operator ear pending |
-| 2 | Editor (waveform, markers, nudge, seam) + loop modes + fades | acceptance 2, 4 | already in place from Slot W (0.2.0–0.4.0); applies to decoded samples unchanged |
-| 3 | Export: smpl/bext writer ✔, EXPORT RANGE, BATCH, native/16-bit options, Cubase validation | acceptance 3, 5, 6 | writer + SAVE AS ✔ (any source); RANGE / BATCH / stereo-fold options open |
-| 4 | A/B slots, SUGGEST / CLICK METER / LOUDNESS, metadata boxes, zone map ✔, SOURCE LIST panel, polish | acceptance 7, 8 | open (SC-016 carries the assists) |
+| 1 | Sources + playback: WAV / SF2 / module load, sample list, MIDI play with own loops | v2 acceptance 1 (GM SF2, .it with ping-pong, .xm, .mod, 32f WAV all list, play in tune, honour loops, no crash on junk) | **0.6.0**: several sources open at once (SOURCE LIST + CONTENTS), every sample plays decoded (`[routing]` `[mod-play]`); operator ear pending |
+| 2 | Editor (waveform, markers, nudge, seam) + loop modes + fades | acceptance 2, 4 | **0.6.0**: per-sample session edits for any source; snap on release; harness `[markers]` |
+| 3 | Export: smpl/bext writer ✔, EXPORT RANGE, BATCH, native/16-bit options, Cubase validation | acceptance 3, 5, 6 | **0.6.0 code complete**: `exportWav` (range + marker remap, 16-bit/44.1 mono sinc + TPDF, SUM / L-only fold), EXPORT SAMPLE / RANGE / ALL with progress + log, folders remembered; harness `[export]`; Cubase validation pending |
+| 4 | A/B slots, SUGGEST / CLICK METER / LOUDNESS, metadata boxes, zone map ✔, SOURCE LIST panel, polish | acceptance 7, 8 | **0.6.0 code complete**: A/B/SPLIT/TOGGLE, assists (`[assists]`), METADATA box (SF2 INFO / MODULE INFO / WAV CHUNKS), QWERTY piano; pluginval + ear pending |
 
 ## §5 Test material
 
@@ -202,8 +207,12 @@ synth bank — docs/DSP.md acceptance 1); they live on the share, never in git.
 | # | Deviation | Why | Date |
 |---|---|---|---|
 | D-1 | Plain JUCE Components instead of the house JUCE-8-WebView face; validator `gui` stage (headless Chrome + fake bridge) does not apply and is omitted, not faked. | Spec + handoff both mandate stock JUCE; a bench tool built in a day. `juce-webview` persona is therefore situational here, not mandatory. | 2026-08-30 |
-| D-2 | IBM Plex Sans/Mono not bundled; JUCE default sans + Consolas. | Handoff's own substitution rule ("keep the sans/mono split"). Bundling Plex is a one-line change if the operator wants it. | 2026-08-30 |
-| D-3 | Window height is the SUM of the handoff's stated row heights (48 + 310 + 120 + 44 = 522 px) rather than the ~700 px of the Claude Design preview frame. | The README says "scale down proportionally if a smaller default window is required, do not shrink the strip below 48 px or numerals below 16 px" — both kept at full size; 700 was the preview canvas, not a row sum. | 2026-08-30 |
+| D-2 | ~~IBM Plex Sans/Mono not bundled~~ — **RETIRED 0.6.0**: Plex Sans 400/500/600 + Mono 400/500/700 are bundled from `third_party/fonts/` (OFL 1.1) as BinaryData, per handoff v2. | Handoff v2 CHANGES 2. | 2026-09-13 |
+| D-3 | ~~Window height = row sum 522 px~~ — **SUPERSEDED 0.6.0** by the v2 canvas 1200 × 840 (handoff v2 states it explicitly). | — | 2026-09-13 |
+| D-7 | A stereo source (stereo WAV, stereo module sample) EXPORTS as mono, folded per the STEREO option (SUM −3 dB / L ONLY); native export keeps rate and depth only. SAVE (WAV round-trip) stays byte-identical stereo. | Spec lists "stereo fold rules (sum, or L-only) selectable" and the face enables the option for any stereo source; the Dreamer ROM takes mono. Reversible if the operator wants stereo exports (OPEN QUESTION 13). | 2026-09-13 |
+| D-8 | Footer DEVICE chip at x 772 (manifest said 806): the manifest's resolved x would overlap the "MIDI IN" label; README §6's flex rule (gap 12, right-anchored) wins, reported to gui-claude. | Handoff-internal contradiction; the README prose is the design of record. | 2026-09-13 |
+| D-9 | The engine no longer has an SF2 preset-by-key-range player: every sample (SF2 zone, module sample, WAV) plays as a decoded `WavSample` in a slot, so session edits are what you hear. The zone map click selects and plays that zone. Stereo SF2 pairs play/export as two mono halves (OPEN QUESTION 10). | v2 spec "note-on plays the selected sample transposed from its root"; A/B are single samples. | 2026-09-13 |
+| D-10 | Voice pool 16 (spec) — was 32 in v1 (docs/DSP.md). | v2 spec "16 voices; oldest-steal" is canon. | 2026-09-13 |
 | D-4 | Linear pan (centre = unity) for stereo halves, sqrt velocity curve, no SF2 attenuation generator. | Spec: velocity → level only; samples auditioned raw. | 2026-08-30 |
 | D-5 | Loop seam: linear interpolation with the second tap wrapped into the loop; no crossfade. | Spec: crossfade only if raw looping clicks audibly — decide after the operator's ear pass. | 2026-08-30 |
 | D-6 | `third_party/tsf/tsf.h` is NOT byte-verbatim upstream: 3 lines marked `/* SF2SCOUT PATCH */` add `tsf_region::sample_id` (the `sampleID` generator index). | TSF discards the hydra after load and joining region→sample by offset misattributes zones that use `startAddrsOffset` (architect finding 6). Re-apply when bumping TSF; harness `[sample-id]` pins it. | 2026-08-30 |

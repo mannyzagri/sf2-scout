@@ -1,23 +1,28 @@
 // ScoutEngine -- the audition voice pool. JUCE-free; real-time safe.
 //
-// Deliberately NOT a SoundFont synthesizer (docs/DSP.md "What to IGNORE"):
-// no envelopes beyond a fixed protective release fade, no LFOs, no filter,
-// no modulators, no velocity crossfades. A voice is a read pointer over the
-// bank's float pool with linear interpolation and loop logic. Two play modes:
-//   AsAuthored : start at the zone's play start, loop per sampleModes
-//   LoopOnly   : start AT loopStart and loop [loopStart, loopEnd) from sample 0
-//                (no loop defined -> loop the whole sample)
+// v2 model (docs/SCOUT_v2_SPEC.md "Playback / audition", handoff v2): every
+// source sample -- a WAV, a decoded SF2 zone, a decoded tracker sample -- enters
+// the engine as a WavSample in one of three SLOTS:
+//   A, B : the two selection slots the MIDI keyboard plays (KbMode A / B /
+//          SPLIT below-above a split note / TOGGLE, TAB swaps)
+//   Cur  : the editor's current sample -- PLAY / SPACE latch, double-click,
+//          zone-strip click audition it regardless of the keyboard routing
+// A voice is a read pointer over its slot's float data with linear
+// interpolation, forward / ping-pong / off looping, ATTACK fade-in, RELEASE fade
+// (the loop keeps cycling under it), and two audition variants:
+//   AsAuthored : start at frame 0, loop per the slot's loop kind
+//   LoopOnly   : start AT loopStart and loop [loopStart, loopEnd]
 //
 // Threading contract:
-//   * process()/noteOn()/noteOff()/setBank-consumption run on the AUDIO thread.
-//   * setBank() may be called from any thread; the swap happens at the top of
-//     the next process() and the previous bank is parked in `retired` for the
-//     caller's thread to delete via takeRetiredBank(). No allocation, no locks.
+//   * process()/noteOn*()/noteOff*() run on the AUDIO thread.
+//   * setSlot() may be called from any thread; the swap happens at the top of
+//     the next process() and the previous sample is parked in that slot's
+//     retiree for the caller's thread to collect via takeRetired(). No
+//     allocation, no locks. Live edit state travels through atomics.
 //   * Readout state (last note, playhead, voice count) is published through
 //     relaxed atomics for a UI timer to poll.
 #pragma once
 
-#include "SoundFontBank.h"
 #include "WavSample.h"
 #include <atomic>
 #include <array>
@@ -27,27 +32,17 @@ namespace sf2scout
 {
 
 enum class PlayMode : int { AsAuthored = 0, LoopOnly = 1 };
+enum class LoopKind : int { Forward = 0, PingPong = 1, Off = 2 };
+enum class KbMode   : int { A = 0, B = 1, Split = 2, Toggle = 3 };
 
-// Slot W (docs/SF2SCOUT_WAV_EXTENSION.md): the WAV is one more sample source
-// for the SAME voice pool. Focus decides which slot a key plays.
-enum class Focus : int { R = 0, W = 1, Split = 2 };
-enum class WavLoopMode : int { Forward = 0, PingPong = 1, Off = 2 };
-
-struct LastNoteInfo
-{
-    int presetIndex = -1;
-    int note        = -1;
-    int velocity    = 0;
-    int zoneIndex   = -1;        // index into Preset::zones of the zone described
-    uint32_t sequence = 0;       // see lastNote() -- advances by 2 per note-on, never odd here
-};
+// slot indices (also the order the UI shows them)
+constexpr int kSlotA = 0, kSlotB = 1, kSlotCur = 2, kSlots = 3;
 
 class ScoutEngine
 {
 public:
-    static constexpr int kMaxVoices      = 32;
-    static constexpr double kReleaseMs   = 80.0;   // protective fade (spec §4)
-    static constexpr double kBendRangeSt = 2.0;    // spec §2 (nice-to-have)
+    static constexpr int kMaxVoices      = 16;      // spec: "16 voices; oldest-steal"
+    static constexpr double kBendRangeSt = 2.0;
 
     ScoutEngine();
     ~ScoutEngine();
@@ -55,145 +50,116 @@ public:
     void prepare (double sampleRate);
     void reset();                                  // all voices off, immediate
 
-    // Hands a bank to the audio thread. Ownership passes to the engine.
-    // Any bank the audio thread has finished with is available from
-    // takeRetiredBank() -- poll it from the same thread that called setBank().
-    void setBank (SoundFontBank* bank);
-    SoundFontBank* takeRetiredBank();
-    // UNLOAD: asks the audio thread to drop the bank (its voices die, the bank
-    // comes back through takeRetiredBank()). Any thread. clearWav() likewise.
-    void clearBank();
-    void clearWav();
-    // Message-thread view of the currently *requested* bank (may lag the audio
-    // thread by one block). Readout code uses this to resolve zone indices.
-    const SoundFontBank* requestedBank() const { return requested_.load (std::memory_order_acquire); }
+    // ---- slot handoff. Ownership passes in; any sample the audio thread has
+    // finished with comes back through takeRetired(slot) -- poll it from the
+    // thread that called setSlot(). One retiree per slot: a second swap waits
+    // (keeps playing the current sample) until the collector caught up.
+    // A sample that was still PENDING (never reached the audio thread) when it
+    // is superseded or cleared is handed straight back to the caller as the
+    // return value -- the engine never deletes what it never played.
+    WavSample* setSlot (int slot, WavSample* sample);
+    WavSample* takeRetired (int slot);
+    WavSample* clearSlot (int slot);               // UNLOAD: voices die, sample retired; returns a dropped pending one
+    // Owner teardown only (audio thread stopped): forget every pointer without
+    // deleting -- for an owner that shares its samples elsewhere.
+    void forgetAll();
+    // Message-thread view of the *requested* sample (may lag the audio thread by one block).
+    const WavSample* requested (int slot) const { return slots_[(size_t) slot].requested.load (std::memory_order_acquire); }
+    bool hasSlot (int slot) const { return requested (slot) != nullptr; }
 
-    // ---- Slot W. Same handoff contract as the bank: ownership passes in,
-    // the retiree comes back through takeRetiredWav() on the caller's thread.
-    void setWav (WavSample* wav);
-    WavSample* takeRetiredWav();
-    // Live editing state, any thread -> read by the audio thread at the top of
+    // ---- live edit state, any thread -> read by the audio thread at the top of
     // each process() (loop points packed into ONE atomic so they never tear).
-    void setWavLoop (uint32_t startFrame, uint32_t endFrameInclusive, WavLoopMode mode);
-    void setWavTuning (int rootKey, double fineCents);
-    void setWavFades (double attackMs, double releaseMs);
-    void setFocus (Focus f, int splitNote);
-    // playhead of the most recent WAV voice in frames, or -1 if none is sounding
-    double lastWavPlayhead() const { return lastWavPlayhead_.load (std::memory_order_relaxed); }
-    int    lastWavNote() const     { return lastWavNote_.load (std::memory_order_relaxed); }
-    // MIDI note -> slot, per the current focus/split (pure; used by the UI too).
-    // An EMPTY target slot falls back to the loaded one, so a focus left on
-    // WAV/SPLIT can never mute the SF2 (and vice versa) -- see noteOn().
-    static bool routesToWav (Focus f, int split, int note) { return f == Focus::W || (f == Focus::Split && note >= split); }
-    static bool routesToWav (Focus f, int split, int note, bool haveSf2, bool haveWav)
-    {
-        bool toWav = routesToWav (f, split, note);
-        if (toWav && ! haveWav) toWav = false;
-        if (! toWav && ! haveSf2 && haveWav) toWav = true;
-        return toWav;
-    }
+    void setSlotLoop (int slot, uint32_t startFrame, uint32_t endFrameInclusive, LoopKind kind);
+    void setSlotTuning (int slot, int rootKey, double fineCents);
+    void setSlotFades (int slot, double attackMs, double releaseMs);
 
-    // audio-thread API
-    void setMode (PlayMode m)     { mode_ = m; }
-    void setPreset (int index)    { preset_ = index; }
+    // ---- keyboard routing (any thread). toggleOn: 0 = A sounds, 1 = B sounds.
+    void setKeyboard (KbMode mode, int splitNote, int toggleOn);
+    // MIDI note -> slot index (kSlotA / kSlotB) or -1 (nothing to play). Pure;
+    // the UI uses it too. An EMPTY target falls back to the other loaded slot so
+    // a routing left on an unloaded slot can never mute the keyboard.
+    static int routeSlot (KbMode mode, int splitNote, int toggleOn, int note, bool haveA, bool haveB);
+
+    // ---- audio-thread API
+    void setMode (PlayMode m)        { mode_ = m; }
+    PlayMode mode() const            { return mode_; }
     void setPitchBend (double semis) { bendSemis_ = semis; }
-    void noteOn (int note, int velocity);
-    void noteOnWav (int note, int velocity);      // Slot W regardless of focus (PLAY button)
-    void noteOff (int note);
+    void noteOn (int note, int velocity);                   // keyboard: routed to A / B
+    void noteOnSlot (int slot, int note, int velocity);     // audition a slot directly (PLAY, zone click)
+    void noteOff (int note);                                // every voice on that note, any slot
+    void noteOffSlot (int slot, int note);
     void allNotesOff();
     // Renders `numSamples` into left/right (ADDS to them). Applies `gain`.
     void process (float* left, float* right, int numSamples, float gain);
 
-    // polled by the UI
-    // F5: lastSeq_ is a classic seqlock, not a plain counter. The writer
-    // (noteOn, audio thread) bumps it to an ODD value before touching the
-    // fields, writes preset/note/velocity/zone, then bumps it again to the
-    // next EVEN value once all four are published. A reader who observes an
-    // odd sequence, or a sequence that changed between its first and last
-    // load, saw a torn write and must retry -- this is what makes a 4-field
-    // read atomic without ever taking a lock on the audio thread. Retries are
-    // bounded (kSeqlockRetries) so a UI thread can never spin on this.
-    static constexpr int kSeqlockRetries = 8;
-    LastNoteInfo lastNote() const;
-    int    activeVoiceCount() const { return activeVoices_.load (std::memory_order_relaxed); }
-    // playhead of the most recent voice, sample-relative (0..sampleLength), or -1 if it stopped
-    double lastPlayhead() const { return lastPlayhead_.load (std::memory_order_relaxed); }
+    // ---- polled by the UI
+    int    activeVoiceCount() const        { return activeVoices_.load (std::memory_order_relaxed); }
+    // playhead of the slot's most recent voice in frames, or -1 if none is sounding
+    double lastPlayhead (int slot) const   { return slots_[(size_t) slot].lastPlayhead.load (std::memory_order_relaxed); }
+    int    lastNote (int slot) const       { return slots_[(size_t) slot].lastNote.load (std::memory_order_relaxed); }
+    int    lastVelocity (int slot) const   { return slots_[(size_t) slot].lastVel.load (std::memory_order_relaxed); }
+    // advances by one per note-on on that slot -- the UI diffs it to notice new notes
+    uint32_t noteCounter (int slot) const  { return slots_[(size_t) slot].noteSeq.load (std::memory_order_relaxed); }
 
 private:
     struct Voice
     {
-        bool     active   = false;
+        bool     active    = false;
         bool     releasing = false;
-        int      note     = -1;
+        int      slot      = -1;
+        int      note      = -1;
         uint32_t startOrder = 0;
-        const Zone* zone  = nullptr;
-        double   pos      = 0.0;      // absolute sample position
-        double   step     = 0.0;      // samples advanced per output sample
-        double   baseStep = 0.0;      // before pitch bend
-        float    gain     = 0.0f;     // velocity gain
-        float    panL = 1.0f, panR = 1.0f;
-        bool     loop     = false;
-        double   loopStart = 0, loopEnd = 0, playEnd = 0;
-        float    fade     = 1.0f;     // release multiplier
-        float    fadeStep = 0.0f;
-        bool     isLatest = false;
-        // Slot W voice
-        bool     isWav    = false;
-        int      dir      = 1;        // ping-pong direction (+1 / -1)
-        float    attack   = 1.0f;     // attack fade-in multiplier
+        double   pos       = 0.0;
+        double   step      = 0.0;
+        double   baseStep  = 0.0;
+        int      dir       = 1;
+        float    gain      = 0.0f;
+        float    fade      = 1.0f;
+        float    fadeStep  = 0.0f;
+        float    attack    = 1.0f;
         float    attackStep = 0.0f;
+        bool     isLatest  = false;
     };
 
-    void startVoice (const Zone& z, int note, int velocity);
-    void startWavVoice (int note, int velocity);
+    struct Slot
+    {
+        WavSample* active = nullptr;                          // audio thread only
+        std::atomic<WavSample*> pending  { nullptr };
+        std::atomic<WavSample*> retired  { nullptr };
+        std::atomic<const WavSample*> requested { nullptr };
+        std::atomic<bool> clear { false };
+        std::atomic<uint64_t> loop { 0 };                     // (start << 32) | endInclusive
+        std::atomic<int>      kind { (int) LoopKind::Forward };
+        std::atomic<int>      root { 60 };
+        std::atomic<double>   cents { 0.0 };
+        std::atomic<double>   attackMs { 0.0 };
+        std::atomic<double>   releaseMs { 80.0 };
+        // per-block snapshot (audio thread only)
+        double curStart = 0.0, curEnd = 0.0;
+        LoopKind curKind = LoopKind::Forward;
+        // published
+        std::atomic<double>   lastPlayhead { -1.0 };
+        std::atomic<int>      lastNote { -1 };
+        std::atomic<int>      lastVel { 0 };
+        std::atomic<uint32_t> noteSeq { 0 };
+    };
+
+    void consumePending (Slot& s);
+    void startVoice (int slot, int note, int velocity);
     void renderVoice (Voice& v, float* left, float* right, int numSamples, float gain);
-    void renderWavVoice (Voice& v, float* left, float* right, int numSamples, float gain);
     Voice* allocateVoice();
-    void consumePendingBank();
-    void consumePendingWav();
     void beginRelease (Voice& v);
 
     std::array<Voice, kMaxVoices> voices_;
+    std::array<Slot, kSlots> slots_;
     double   sampleRate_ = 44100.0;
     PlayMode mode_       = PlayMode::AsAuthored;
-    int      preset_     = 0;
     double   bendSemis_  = 0.0;
     uint32_t orderCounter_ = 0;
-
-    // bank handoff
-    SoundFontBank* active_ = nullptr;                       // audio thread only
-    std::atomic<SoundFontBank*> pending_  { nullptr };
-    std::atomic<SoundFontBank*> retired_  { nullptr };
-    std::atomic<const SoundFontBank*> requested_ { nullptr };
-    std::atomic<bool> clearBank_ { false };
-    std::atomic<bool> clearWav_  { false };
-
-    // Slot W handoff + live edit state
-    WavSample* activeWav_ = nullptr;                        // audio thread only
-    std::atomic<WavSample*> pendingWav_ { nullptr };
-    std::atomic<WavSample*> retiredWav_ { nullptr };
-    std::atomic<uint64_t>   wavLoop_    { 0 };              // (start << 32) | endInclusive
-    std::atomic<int>        wavLoopMode_ { (int) WavLoopMode::Forward };
-    std::atomic<int>        wavRoot_    { 60 };
-    std::atomic<double>     wavCents_   { 0.0 };
-    std::atomic<double>     wavAttackMs_  { 5.0 };
-    std::atomic<double>     wavReleaseMs_ { 80.0 };
-    std::atomic<int>        focus_      { (int) Focus::R };
-    std::atomic<int>        split_      { 60 };
-    // per-block snapshot of the loop state (audio thread only)
-    double curLoopStart_ = 0.0, curLoopEnd_ = 0.0;          // frames, end inclusive
-    WavLoopMode curLoopMode_ = WavLoopMode::Forward;
-    std::atomic<double>     lastWavPlayhead_ { -1.0 };
-    std::atomic<int>        lastWavNote_ { -1 };
-
-    // published state
-    std::atomic<int>      activeVoices_ { 0 };
-    std::atomic<double>   lastPlayhead_ { -1.0 };
-    std::atomic<uint32_t> lastSeq_      { 0 };
-    std::atomic<int>      lastPreset_   { -1 };
-    std::atomic<int>      lastNoteNum_  { -1 };
-    std::atomic<int>      lastVel_      { 0 };
-    std::atomic<int>      lastZone_     { -1 };
+    std::atomic<int> kbMode_   { (int) KbMode::A };
+    std::atomic<int> split_    { 60 };
+    std::atomic<int> toggleOn_ { 0 };
+    std::atomic<int> activeVoices_ { 0 };
 };
 
 } // namespace sf2scout
