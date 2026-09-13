@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  html, body { margin:0; padding:0; background:#e9e9e5; --sans:"IBM Plex Sans", Verdana, sans-serif; --mono:"IBM Plex Mono", Consolas, monospace; }
+  * { box-sizing:border-box; }
+  a { color:#2e5c8a; } a:hover { color:#24486d; }
+  input { outline:none; }
+  input:focus { border-color:#2e5c8a !important; }
+  @keyframes scoutBlink { 0%,100% { opacity:1 } 50% { opacity:.35 } }
+</style>
+</helmet>
+
+<div style="padding:16px; font-family:var(--sans); color:#1c1c1a; display:flex; flex-direction:column; gap:8px; width: {{ outerW }}px;">
+<div style="display:flex; justify-content:space-between; align-items:baseline; padding:0 2px;">
+  <div style="font:600 13px var(--sans); color:#1c1c1a;">SF2 Scout v2 — face, 1200 × 840 · {{ scalePct }}</div>
+  <div style="font:11px var(--mono); color:#8a8a80;">{{ hint }}</div>
+</div>
+
+<div style="width: {{ scaledW }}px; height: {{ scaledH }}px;">
+<div data-screen-label="Face" tabindex="0" onKeyDown="{{ onKey }}" style="transform-origin:0 0; transform: scale({{ scale }}); position:relative; width:1200px; height:840px; background:#f6f6f3; border:1px solid #c9c9c2; overflow:hidden; display:flex; flex-direction:column; outline:none;">
+
+  <!-- HEADER 48 -->
+  <div style="height:48px; flex:none; background:#efefea; border-bottom:1px solid #d7d7d0; display:flex; align-items:center; gap:14px; padding:0 16px;">
+    <div onClick="{{ loadSource }}" style="width:64px; height:30px; border-radius:4px; background:#2e5c8a; color:#fff; font:700 11px var(--sans); letter-spacing:.9px; display:flex; align-items:center; justify-content:center; cursor:pointer;" style-hover="background:#24486d">LOAD</div>
+    <div style="width:250px; display:flex; flex-direction:column; gap:3px;">
+      <div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80;">SOURCES OPEN</div>
+      <div style="font:700 13px var(--mono); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ sourceSummary }}</div>
+    </div>
+    <div style="flex:1;"></div>
+    <div style="font:500 10px var(--sans); letter-spacing:1px; color:#5c5c54;">KEYBOARD PLAYS</div>
+    <div style="display:flex; gap:2px; height:32px; padding:1px; border:1px solid #d0d0c8; border-radius:4px; background:#e2e2db;">
+      <div onClick="{{ kbA.onClick }}" style="width:44px; border-radius:3px; display:flex; align-items:center; justify-content:center; font:700 12px var(--mono); cursor:pointer; background: {{ kbA.bg }}; color: {{ kbA.fg }};">A</div>
+      <div onClick="{{ kbB.onClick }}" style="width:44px; border-radius:3px; display:flex; align-items:center; justify-content:center; font:700 12px var(--mono); cursor:pointer; background: {{ kbB.bg }}; color: {{ kbB.fg }};">B</div>
+      <div onClick="{{ kbSplit.onClick }}" style="width:62px; border-radius:3px; display:flex; align-items:center; justify-content:center; font:700 12px var(--mono); cursor:pointer; background: {{ kbSplit.bg }}; color: {{ kbSplit.fg }};">SPLIT</div>
+      <div onClick="{{ kbToggle.onClick }}" style="width:70px; border-radius:3px; display:flex; align-items:center; justify-content:center; font:700 12px var(--mono); cursor:pointer; background: {{ kbToggle.bg }}; color: {{ kbToggle.fg }};">TOGGLE</div>
+    </div>
+    <input value="{{ fSplit.value }}" onChange="{{ fSplit.onChange }}" onKeyDown="{{ fSplit.onKeyDown }}" onBlur="{{ fSplit.onBlur }}" title="split note — keys below play A, at/above play B" style="width:48px; height:24px; border:1px solid #d0d0c8; background:#fff; font:700 12px var(--mono); text-align:center; color:#1c1c1a; opacity: {{ splitOpacity }};">
+    <div style="width:10px;"></div>
+    <div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80;">MODE</div>
+    <div style="display:flex; gap:2px; height:30px; padding:1px; border:1px solid #d0d0c8; border-radius:4px; background:#e2e2db;">
+      <div onClick="{{ modeAuth.onClick }}" style="width:95px; border-radius:3px; display:flex; align-items:center; justify-content:center; font:700 11px var(--mono); cursor:pointer; background: {{ modeAuth.bg }}; color: {{ modeAuth.fg }};">AS-AUTHORED</div>
+      <div onClick="{{ modeLoop.onClick }}" style="width:82px; border-radius:3px; display:flex; align-items:center; justify-content:center; font:700 11px var(--mono); cursor:pointer; background: {{ modeLoop.bg }}; color: {{ modeLoop.fg }};">LOOP-ONLY</div>
+    </div>
+  </div>
+
+  <div style="flex:1; display:flex; min-height:0;">
+  <!-- MAIN 944 -->
+  <div style="width:944px; flex:none; display:flex; flex-direction:column; border-right:1px solid #d7d7d0;">
+
+    <!-- BODY 320 -->
+    <div style="height:320px; flex:none; display:flex; border-bottom:1px solid #d7d7d0;">
+
+      <!-- SOURCE LIST 236 -->
+      <div data-screen-label="Source list" style="width:204px; flex:none; border-right:1px solid #d7d7d0; display:flex; flex-direction:column;">
+        <div style="height:42px; flex:none; display:flex; align-items:center; padding:0 10px 0 12px; gap:6px; border-bottom:1px solid #e3e3dc;">
+          <div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80; flex:1;">SOURCES</div>
+          <div onClick="{{ unloadSource }}" style="height:22px; padding:0 8px; border-radius:3px; background:#fff; border:1px solid #d0d0c8; color:#5c5c54; font:700 10px var(--mono); display:flex; align-items:center; cursor:pointer;" style-hover="background:#eef2f7">UNLOAD</div>
+        </div>
+        <div style="flex:1; overflow-y:auto; overflow-x:hidden;">
+          <sc-for list="{{ treeRows }}" as="r" hint-placeholder-count="6">
+            <div onClick="{{ r.onClick }}" style="height:32px; display:flex; align-items:center; gap:7px; border-bottom:1px solid #edede6; cursor:pointer; padding-right:8px; padding-left: {{ r.pad }}px; background: {{ r.bg }};">
+              <div style="width:10px; font:11px var(--mono); color:#a3a399; text-align:center;">{{ r.caret }}</div>
+              <div style="height:15px; padding:0 4px; border-radius:2px; font:700 9px var(--mono); letter-spacing:.5px; display:flex; align-items:center; color:#fff; background: {{ r.badgeBg }};">{{ r.badge }}</div>
+              <div style="flex:1; min-width:0; font: {{ r.font }}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color: {{ r.fg }};">{{ r.label }}</div>
+              <div style="font:10px var(--mono); color:#a3a399; white-space:nowrap;">{{ r.sub }}</div>
+            </div>
+          </sc-for>
+          <div style="height:32px; display:flex; align-items:center; padding:0 12px; font:11px var(--sans); color:#a3a399;">drop .sf2 · .it .xm .mod .s3m · .wav here</div>
+        </div>
+      </div>
+
+      <!-- CONTENTS 280 -->
+      <div data-screen-label="Contents" style="width:296px; flex:none; border-right:1px solid #d7d7d0; display:flex; flex-direction:column;">
+        <div style="height:42px; flex:none; display:flex; align-items:center; padding:0 10px 0 12px; gap:6px; border-bottom:1px solid #e3e3dc;">
+          <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:2px;">
+            <div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80;">{{ listKind }}</div>
+            <div style="font:700 11px var(--mono); color:#1c1c1a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ listTitle }}</div>
+          </div>
+          <div onClick="{{ assignA }}" title="send selected sample to slot A" style="height:22px; width:34px; border-radius:3px; background:#fff; border:1px solid #d0d0c8; color:#5c5c54; font:700 10px var(--mono); display:flex; align-items:center; justify-content:center; cursor:pointer;" style-hover="background:#eef2f7">→ A</div>
+          <div onClick="{{ assignB }}" title="send selected sample to slot B" style="height:22px; width:34px; border-radius:3px; background:#fff; border:1px solid #d0d0c8; color:#5c5c54; font:700 10px var(--mono); display:flex; align-items:center; justify-content:center; cursor:pointer;" style-hover="background:#eef2f7">→ B</div>
+          <div onClick="{{ prevSample }}" style="height:22px; width:22px; border-radius:3px; background:#fff; border:1px solid #d0d0c8; font:700 11px var(--mono); display:flex; align-items:center; justify-content:center; cursor:pointer;" style-hover="background:#eef2f7">‹</div>
+          <div onClick="{{ nextSample }}" style="height:22px; width:22px; border-radius:3px; background:#fff; border:1px solid #d0d0c8; font:700 11px var(--mono); display:flex; align-items:center; justify-content:center; cursor:pointer;" style-hover="background:#eef2f7">›</div>
+        </div>
+        <div style="height:18px; flex:none; display:flex; align-items:center; padding:0 12px; gap:8px; font:500 9px var(--sans); letter-spacing:.8px; color:#a3a399; border-bottom:1px solid #edede6;">
+          <div style="width:18px;">#</div><div style="flex:1;">NAME</div><div style="width:40px;">FMT</div><div style="width:36px; text-align:right;">FRAMES</div><div style="width:22px; text-align:right;">LP</div><div style="width:36px; text-align:right;">HZ</div>
+        </div>
+        <div style="flex:1; overflow-y:auto; overflow-x:hidden;">
+          <sc-for list="{{ listRows }}" as="s" hint-placeholder-count="8">
+            <div onClick="{{ s.onClick }}" onDoubleClick="{{ s.onPlay }}" style="height:26px; display:flex; align-items:center; padding:0 12px; gap:6px; border-bottom:1px solid #edede6; cursor:pointer; background: {{ s.bg }};" style-hover="background:#eef2f7">
+              <div style="width:18px; font:11px var(--mono); color: {{ s.idxColor }};">{{ s.idx }}</div>
+              <div style="flex:1; min-width:96px; font:12px var(--sans); color:#1c1c1a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:flex; align-items:center; gap:5px;">
+                <span style="overflow:hidden; text-overflow:ellipsis;">{{ s.name }}</span>
+                <span style="font:700 9px var(--mono); color:#fff; background:#2e5c8a; border-radius:2px; padding:0 3px; line-height:13px; display: {{ s.showA }};">A</span>
+                <span style="font:700 9px var(--mono); color:#fff; background:#5c5c54; border-radius:2px; padding:0 3px; line-height:13px; display: {{ s.showB }};">B</span>
+              </div>
+              <div style="width:40px; font:10px var(--mono); color:#5c5c54; white-space:nowrap;">{{ s.fmt }}</div>
+              <div style="width:36px; font:10px var(--mono); color:#5c5c54; text-align:right; white-space:nowrap;">{{ s.frames }}</div>
+              <div style="width:22px; font:700 10px var(--mono); text-align:right; color: {{ s.kindColor }};">{{ s.kind }}</div>
+              <div style="width:36px; font:10px var(--mono); color:#5c5c54; text-align:right;">{{ s.rate }}</div>
+            </div>
+          </sc-for>
+          <sc-if value="{{ listEmpty }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:14px 12px; font:11px var(--sans); color:#a3a399;">{{ listEmptyMsg }}</div>
+          </sc-if>
+        </div>
+      </div>
+
+      <!-- READOUT A | B -->
+      <div data-screen-label="Readout" style="flex:1; display:flex; padding:12px 16px 12px 16px; gap:14px; min-width:0;">
+        <sc-for list="{{ readCols }}" as="c" hint-placeholder-count="2">
+          <div style="flex:1; min-width:0; display:flex; flex-direction:column; border-right: {{ c.border }}; padding-right: {{ c.padR }}px;">
+            <div style="display:flex; align-items:center; gap:6px; height:16px;">
+              <div style="width:16px; height:16px; border-radius:3px; color:#fff; font:700 11px var(--mono); display:flex; align-items:center; justify-content:center; background: {{ c.slotBg }};">{{ c.slot }}</div>
+              <div style="height:14px; padding:0 4px; border-radius:2px; font:700 9px var(--mono); letter-spacing:.5px; display:flex; align-items:center; color:#fff; background: {{ c.badgeBg }};">{{ c.badge }}</div>
+              <div style="flex:1; min-width:0; font:11px var(--mono); color:#5c5c54; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ c.path }}</div>
+              <div style="width:7px; height:7px; border-radius:4px; background: {{ c.liveDot }};"></div>
+            </div>
+            <div style="display:flex; gap:10px; margin-top:12px; height:38px; white-space:nowrap;">
+              <div><div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80;">PLAYED</div><div style="font:700 20px var(--mono); color:#2e5c8a; line-height:24px; white-space:nowrap;">{{ c.played }}</div></div>
+              <div><div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80;">ROOT</div><div style="font:700 20px var(--mono); line-height:24px; white-space:nowrap;">{{ c.root }}<span style="font:700 11px var(--mono); color:#5c5c54; margin-left:3px;">{{ c.fine }}</span></div></div>
+              <div><div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80;">STRETCH</div><div style="font:700 20px var(--mono); line-height:24px; white-space:nowrap; color: {{ c.stretchColor }};">{{ c.stretch }}</div></div>
+            </div>
+            <div style="margin-top:12px; display:flex; flex-direction:column; gap:1px;">
+              <sc-for list="{{ c.rows }}" as="r" hint-placeholder-count="8">
+                <div style="display:flex; height:17px; align-items:center; font:11px var(--mono);">
+                  <div style="width:66px; color:#8a8a80; flex:none;">{{ r.k }}</div>
+                  <div style="flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color: {{ r.c }};">{{ r.v }}</div>
+                </div>
+              </sc-for>
+            </div>
+            <sc-if value="{{ c.empty }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top:14px; font:11px var(--sans); color:#a3a399; line-height:1.5;">{{ c.emptyMsg }}</div>
+            </sc-if>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- ZONE BAND 104 -->
+    <div data-screen-label="Zone map" style="height:104px; flex:none; background:#f1f1ec; border-bottom:1px solid #d7d7d0; padding:11px 16px 0;">
+      <div style="display:flex; height:12px; align-items:center; font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80;">
+        <div style="flex:1;">{{ zoneTitle }}</div>
+        <div>{{ zoneCount }}</div>
+      </div>
+      <div style="margin-top:5px; height:52px; display:flex; background:#fff; border:1px solid #c9c9c2; border-radius:3px; overflow:hidden;">
+        <sc-for list="{{ zoneCells }}" as="k" hint-placeholder-count="128">
+          <div onClick="{{ k.onClick }}" title="{{ k.title }}" style="flex:1; position:relative; cursor:pointer; border-right: {{ k.edge }}; background: {{ k.bg }};">
+            <div style="position:absolute; left:0; right:0; top:0; height:58%; background:rgba(28,28,26,.30); opacity: {{ k.black }};"></div>
+            <div style="position:absolute; left:0; right:0; bottom:0; height:4px; background:rgba(28,28,26,.35); opacity: {{ k.cMark }};"></div>
+          </div>
+        </sc-for>
+      </div>
+      <div style="position:relative; height:20px; margin-top:4px;">
+        <sc-for list="{{ zoneLabels }}" as="z" hint-placeholder-count="4">
+          <div style="position:absolute; top:0; height:20px; border-left:1px solid #d0d0c8; padding-left:6px; overflow:hidden; white-space:nowrap; font:10px var(--mono); line-height:10px; left: {{ z.left }}px; width: {{ z.width }}px;">
+            <div style="color:#5c5c54;">{{ z.name }}</div><div style="color:#a3a399;">{{ z.range }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- EDITOR -->
+    <div data-screen-label="Editor" style="flex:1; padding:10px 16px 0; display:flex; flex-direction:column; min-height:0;">
+      <div style="height:12px; display:flex; align-items:center; gap:8px; font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80;">
+        <div style="white-space:nowrap;">EDITOR</div>
+        <div style="height:14px; padding:0 4px; border-radius:2px; font:700 9px var(--mono); letter-spacing:.5px; display:flex; align-items:center; color:#fff; background: {{ ed.badgeBg }};">{{ ed.badge }}</div>
+        <div style="font:700 11px var(--mono); color:#1c1c1a; letter-spacing:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1;">{{ ed.title }}</div>
+        <div style="font:700 11px var(--mono); letter-spacing:0; white-space:nowrap; color: {{ statusColor }};">{{ status }}</div>
+      </div>
+      <div style="height:26px; margin-top:8px; display:flex; align-items:center; gap:8px;">
+        <div onClick="{{ togglePlay }}" style="width:84px; height:26px; border-radius:4px; font:700 11px var(--sans); letter-spacing:.9px; display:flex; align-items:center; justify-content:center; cursor:pointer; border:1px solid #d0d0c8; background: {{ playBg }}; color: {{ playFg }};">{{ playLabel }}</div>
+        <div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80; margin-left:6px;">LOOP</div>
+        <div style="display:flex; gap:2px; height:26px; padding:1px; border:1px solid #d0d0c8; border-radius:4px; background:#e2e2db;">
+          <div onClick="{{ lpF.onClick }}" style="width:44px; border-radius:3px; display:flex; align-items:center; justify-content:center; font:700 11px var(--mono); cursor:pointer; background: {{ lpF.bg }}; color: {{ lpF.fg }};">FWD</div>
+          <div onClick="{{ lpP.onClick }}" style="width:83px; border-radius:3px; display:flex; align-items:center; justify-content:center; font:700 11px var(--mono); cursor:pointer; background: {{ lpP.bg }}; color: {{ lpP.fg }};">PING-PONG</div>
+          <div onClick="{{ lpO.onClick }}" style="width:44px; border-radius:3px; display:flex; align-items:center; justify-content:center; font:700 11px var(--mono); cursor:pointer; background: {{ lpO.bg }}; color: {{ lpO.fg }};">OFF</div>
+        </div>
+        <div onClick="{{ toggleSnap }}" style="display:flex; align-items:center; gap:7px; height:26px; padding:0 4px; cursor:pointer; margin-left:6px;">
+          <div style="width:17px; height:17px; border:1px solid #d0d0c8; border-radius:4px; background:#fff; display:flex; align-items:center; justify-content:center; color:#2e5c8a; font:700 12px var(--mono);">{{ snapMark }}</div>
+          <div style="font:12px var(--sans); color:#5c5c54;">ZERO-X SNAP</div>
+        </div>
+        <div onClick="{{ suggest }}" title="best-splice search ±200 ms" style="height:26px; padding:0 12px; border-radius:4px; background:#fff; border:1px solid #d0d0c8; font:700 11px var(--sans); letter-spacing:.9px; display:flex; align-items:center; cursor:pointer; margin-left:6px; white-space:nowrap;" style-hover="background:#eef2f7">SUGGEST</div>
+        <div onClick="{{ autoRoot }}" title="autocorrelation on the loop region" style="height:26px; padding:0 12px; border-radius:4px; background:#fff; border:1px solid #d0d0c8; font:700 11px var(--sans); letter-spacing:.9px; display:flex; align-items:center; cursor:pointer; white-space:nowrap;" style-hover="background:#eef2f7">AUTO-DETECT ROOT</div>
+        <div style="flex:1;"></div>
+        <div onClick="{{ saveAs }}" title="{{ saveTitle }}" style="height:26px; width:76px; border-radius:4px; background:#fff; border:1px solid #d0d0c8; font:700 11px var(--sans); letter-spacing:.9px; display:flex; align-items:center; justify-content:center; cursor:pointer;" style-hover="background:#eef2f7">SAVE AS</div>
+        <div onClick="{{ save }}" title="{{ saveTitle }}" style="height:26px; width:60px; border-radius:4px; background:#2e5c8a; color:#fff; font:700 11px var(--sans); letter-spacing:.9px; display:flex; align-items:center; justify-content:center; cursor:pointer; opacity: {{ saveOpacity }};">SAVE</div>
+      </div>
+
+      <!-- WAVEFORM 140 -->
+      <div ref="{{ waveRef }}" onMouseDown="{{ waveDown }}" onMouseMove="{{ waveMove }}" onMouseUp="{{ waveUp }}" onMouseLeave="{{ waveUp }}" onWheel="{{ waveWheel }}" onContextMenu="{{ noMenu }}" style="position:relative; margin-top:6px; height:140px; background:#fff; border:1px solid #c9c9c2; border-radius:3px; overflow:hidden; cursor:crosshair; user-select:none;">
+        <div style="position:absolute; top:0; bottom:0; background:rgba(199,217,234,.55); left: {{ wv.regionL }}px; width: {{ wv.regionW }}px;"></div>
+        <div style="position:absolute; left:0; right:0; top:69px; height:1px; background:#e3e3dc;"></div>
+        <svg width="910" height="138" style="position:absolute; left:0; top:0; display:block;"><path d="{{ wv.path }}" stroke="#2e5c8a" stroke-width="1" fill="none"></path></svg>
+        <div style="position:absolute; top:0; bottom:0; width:2px; background:#4c9a5e; cursor:ew-resize; left: {{ wv.startX }}px;"><div style="position:absolute; left:3px; top:3px; font:700 9px var(--mono); color:#4c9a5e; white-space:nowrap;">START</div></div>
+        <div style="position:absolute; top:0; bottom:0; width:2px; background:#c2453a; cursor:ew-resize; left: {{ wv.endX }}px;"><div style="position:absolute; right:4px; top:3px; font:700 9px var(--mono); color:#c2453a; white-space:nowrap;">END</div></div>
+        <div style="position:absolute; top:0; bottom:0; width:2px; background:#d9772b; left: {{ wv.playX }}px; opacity: {{ wv.playOp }};"></div>
+        <div style="position:absolute; right:6px; bottom:4px; font:10px var(--mono); color:#a3a399;">{{ wv.viewLabel }}</div>
+        <div style="position:absolute; left:6px; bottom:4px; font:10px var(--mono); color:#a3a399;">{{ wv.zoomHint }}</div>
+      </div>
+
+      <!-- LOWER: seam + fields -->
+      <div style="margin-top:8px; display:flex; gap:12px; height:80px;">
+        <div style="width:300px; flex:none; position:relative; background:#fff; border:1px solid #c9c9c2; border-radius:3px; overflow:hidden;">
+          <div style="position:absolute; left:6px; top:3px; font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80;">SEAM  {{ seam.ms }} ms</div>
+          <div style="position:absolute; right:6px; top:3px; font:10px var(--mono); color:#5c5c54;">step {{ seam.step }}</div>
+          <div style="position:absolute; left:0; right:0; top:46px; height:1px; background:#e3e3dc;"></div>
+          <div style="position:absolute; left:149px; top:16px; bottom:0; width:1px; background:#5c5c54;"></div>
+          <svg width="298" height="78" style="position:absolute; left:0; top:0; display:block;">
+            <path d="{{ seam.left }}" stroke="rgba(194,69,58,.9)" stroke-width="1.2" fill="none"></path>
+            <path d="{{ seam.right }}" stroke="rgba(76,154,94,.9)" stroke-width="1.2" fill="none"></path>
+          </svg>
+        </div>
+        <div style="flex:1; display:flex; flex-direction:column; gap:8px; min-width:0;">
+          <div style="display:flex; gap:8px;">
+            <div style="width:84px; flex:none;"><div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80; height:11px;">LOOP START</div><input value="{{ fStart.value }}" onChange="{{ fStart.onChange }}" onKeyDown="{{ fStart.onKeyDown }}" onBlur="{{ fStart.onBlur }}" style="margin-top:2px; width:100%; height:22px; border:1px solid #d0d0c8; background:#fff; font:700 12px var(--mono); text-align:right; padding:0 4px; color:#1c1c1a;"></div>
+            <div style="width:84px; flex:none;"><div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80; height:11px; white-space:nowrap;">LOOP END (INCL)</div><input value="{{ fEnd.value }}" onChange="{{ fEnd.onChange }}" onKeyDown="{{ fEnd.onKeyDown }}" onBlur="{{ fEnd.onBlur }}" style="margin-top:2px; width:100%; height:22px; border:1px solid #d0d0c8; background:#fff; font:700 12px var(--mono); text-align:right; padding:0 4px; color:#1c1c1a;"></div>
+            <div style="width:84px; flex:none;"><div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80; height:11px;">LOOP LEN</div><input value="{{ fLen.value }}" onChange="{{ fLen.onChange }}" onKeyDown="{{ fLen.onKeyDown }}" onBlur="{{ fLen.onBlur }}" style="margin-top:2px; width:100%; height:22px; border:1px solid #d0d0c8; background:#fff; font:700 12px var(--mono); text-align:right; padding:0 4px; color:#1c1c1a;"></div>
+            <div style="width:68px; flex:none;"><div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80; height:11px;">PERIODS</div><div title="loop length ÷ detected period; tinted when non-integer" style="margin-top:2px; height:22px; border:1px solid #e3e3dc; font:700 12px var(--mono); text-align:right; padding:0 4px; line-height:20px; background: {{ periodsBg }}; color: {{ periodsColor }};">{{ periods }}</div></div>
+            <div style="width:52px; flex:none;"><div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80; height:11px;">ROOT</div><input value="{{ fRoot.value }}" onChange="{{ fRoot.onChange }}" onKeyDown="{{ fRoot.onKeyDown }}" onBlur="{{ fRoot.onBlur }}" style="margin-top:2px; width:100%; height:22px; border:1px solid #d0d0c8; background:#fff; font:700 12px var(--mono); text-align:right; padding:0 4px; color:#1c1c1a;"></div>
+            <div style="width:52px; flex:none;"><div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80; height:11px;">FINE c</div><input value="{{ fFine.value }}" onChange="{{ fFine.onChange }}" onKeyDown="{{ fFine.onKeyDown }}" onBlur="{{ fFine.onBlur }}" style="margin-top:2px; width:100%; height:22px; border:1px solid #d0d0c8; background:#fff; font:700 12px var(--mono); text-align:right; padding:0 4px; color:#1c1c1a;"></div>
+            <div style="width:56px; flex:none;"><div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80; height:11px;">ATTACK ms</div><input value="{{ fAtt.value }}" onChange="{{ fAtt.onChange }}" onKeyDown="{{ fAtt.onKeyDown }}" onBlur="{{ fAtt.onBlur }}" style="margin-top:2px; width:100%; height:22px; border:1px solid #d0d0c8; background:#fff; font:700 12px var(--mono); text-align:right; padding:0 4px; color:#1c1c1a;"></div>
+            <div style="width:56px; flex:none;"><div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80; height:11px;">RELEASE ms</div><input value="{{ fRel.value }}" onChange="{{ fRel.onChange }}" onKeyDown="{{ fRel.onKeyDown }}" onBlur="{{ fRel.onBlur }}" style="margin-top:2px; width:100%; height:22px; border:1px solid #d0d0c8; background:#fff; font:700 12px var(--mono); text-align:right; padding:0 4px; color:#1c1c1a;"></div>
+          </div>
+          <div style="display:flex; gap:8px;">
+            <div style="width:110px; flex:none;"><div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80; height:11px;">CLICK METER</div>
+              <div title="seam derivative vs signal 99.5th percentile — green <1 · yellow 1–2 · red >2" style="margin-top:2px; height:22px; display:flex; align-items:center; gap:3px; padding:0 4px; border:1px solid #e3e3dc; background:#fff;">
+                <div style="flex:1; height:10px; border-radius:2px; background: {{ click.g }};"></div><div style="flex:1; height:10px; border-radius:2px; background: {{ click.y }};"></div><div style="flex:1; height:10px; border-radius:2px; background: {{ click.r }};"></div>
+                <div style="width:30px; text-align:right; font:700 11px var(--mono); color:#1c1c1a;">{{ click.v }}</div>
+              </div></div>
+            <div style="width:84px; flex:none;"><div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80; height:11px;">LOUDNESS</div><div style="margin-top:2px; height:22px; border:1px solid #e3e3dc; background:#fff; font:700 12px var(--mono); text-align:right; padding:0 4px; line-height:20px;">{{ loudness }}</div></div>
+            <div style="width:110px; flex:none;"><div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80; height:11px;">SAVE AS PREFIX</div><input value="{{ fPrefix.value }}" onChange="{{ fPrefix.onChange }}" onKeyDown="{{ fPrefix.onKeyDown }}" onBlur="{{ fPrefix.onBlur }}" placeholder="PREFIX" style="margin-top:2px; width:100%; height:22px; border:1px solid #d0d0c8; background:#fff; font:12px var(--mono); padding:0 4px; color:#1c1c1a;"></div>
+            <div style="flex:1; min-width:0;"><div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80; height:11px;">BEXT DESCRIPTION (PROVENANCE, AUTO)</div><input value="{{ fDesc.value }}" onChange="{{ fDesc.onChange }}" onKeyDown="{{ fDesc.onKeyDown }}" onBlur="{{ fDesc.onBlur }}" style="margin-top:2px; width:100%; height:22px; border:1px solid #d0d0c8; background:#fff; font:12px var(--mono); padding:0 4px; color:#5c5c54;"></div>
+          </div>
+        </div>
+      </div>
+      <div style="height:14px; margin-top:8px; display:flex; font:10px var(--mono); white-space:nowrap;">
+        <div style="width:470px; overflow:hidden; text-overflow:ellipsis; color:#5c5c54;">{{ cursorLine }}</div>
+        <div style="flex:1; overflow:hidden; text-overflow:ellipsis; text-align:right; color:#a3a399;">F/P/O loop · [ ] { } start · ; ' : " end · TAB swap A/B · , . sample · SPACE latch · Ctrl+S save</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- EXPORT COLUMN 255 -->
+  <div data-screen-label="Export" style="width:255px; flex:none; min-width:0; display:flex; flex-direction:column; padding:10px 12px 8px; gap:10px; min-height:0; background:#f6f6f3; overflow:hidden;">
+    <div style="display:flex; align-items:center; height:14px;">
+      <div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80; flex:1;">EXPORT</div>
+      <div style="font:10px var(--mono); color:#a3a399;">smpl + bext</div>
+    </div>
+    <div>
+      <div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80; height:11px;">FOLDER</div>
+      <div style="margin-top:3px; display:flex; gap:4px;">
+        <div title="{{ exp.folder }}" style="flex:1; min-width:0; height:24px; border:1px solid #d0d0c8; background:#fff; font:11px var(--mono); padding:0 6px; line-height:22px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; direction:rtl; text-align:left;">{{ exp.folder }}</div>
+        <div onClick="{{ browseFolder }}" style="width:26px; height:24px; border:1px solid #d0d0c8; border-radius:3px; background:#fff; font:700 11px var(--mono); display:flex; align-items:center; justify-content:center; cursor:pointer;" style-hover="background:#eef2f7">…</div>
+      </div>
+      <div style="margin-top:4px; display:flex; gap:4px;">
+        <div onClick="{{ qtRef.onClick }}" style="flex:1; height:20px; border-radius:3px; border:1px solid #d0d0c8; font:700 10px var(--mono); display:flex; align-items:center; justify-content:center; cursor:pointer; background: {{ qtRef.bg }}; color: {{ qtRef.fg }};">reference</div>
+        <div onClick="{{ qtRom.onClick }}" style="flex:1; height:20px; border-radius:3px; border:1px solid #d0d0c8; font:700 10px var(--mono); display:flex; align-items:center; justify-content:center; cursor:pointer; background: {{ qtRom.bg }}; color: {{ qtRom.fg }};">rom</div>
+      </div>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:6px;">
+      <div style="display:flex; align-items:center; gap:6px;">
+        <div style="width:56px; font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80;">AUDIO</div>
+        <div style="flex:1; display:flex; gap:2px; height:22px; padding:1px; border:1px solid #d0d0c8; border-radius:4px; background:#e2e2db;">
+          <div onClick="{{ fmtNat.onClick }}" style="flex:1; border-radius:3px; display:flex; align-items:center; justify-content:center; font:700 10px var(--mono); cursor:pointer; background: {{ fmtNat.bg }}; color: {{ fmtNat.fg }};">NATIVE</div>
+          <div onClick="{{ fmt16.onClick }}" style="flex:1; border-radius:3px; display:flex; align-items:center; justify-content:center; font:700 10px var(--mono); cursor:pointer; white-space:nowrap; background: {{ fmt16.bg }}; color: {{ fmt16.fg }};">16b/44.1 MONO</div>
+        </div>
+      </div>
+      <div style="display:flex; align-items:center; gap:6px;">
+        <div style="width:56px; font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80;">STEREO</div>
+        <div style="flex:1; display:flex; gap:2px; height:22px; padding:1px; border:1px solid #d0d0c8; border-radius:4px; background:#e2e2db; opacity: {{ foldOpacity }};">
+          <div onClick="{{ foldSum.onClick }}" style="flex:1; border-radius:3px; display:flex; align-items:center; justify-content:center; font:700 10px var(--mono); cursor:pointer; background: {{ foldSum.bg }}; color: {{ foldSum.fg }};">SUM</div>
+          <div onClick="{{ foldL.onClick }}" style="flex:1; border-radius:3px; display:flex; align-items:center; justify-content:center; font:700 10px var(--mono); cursor:pointer; background: {{ foldL.bg }}; color: {{ foldL.fg }};">L ONLY</div>
+        </div>
+      </div>
+      <div style="font:10px var(--mono); color:#a3a399; padding-left:62px;">{{ exp.fmtNote }}</div>
+    </div>
+    <div style="height:1px; background:#e3e3dc;"></div>
+    <div onClick="{{ exportSample }}" style="height:28px; border-radius:4px; background:#2e5c8a; color:#fff; font:700 11px var(--sans); letter-spacing:.9px; display:flex; align-items:center; justify-content:center; cursor:pointer;" style-hover="background:#24486d">EXPORT SAMPLE</div>
+    <div style="font:10px var(--mono); color:#5c5c54; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:-4px;">→ {{ exp.sampleName }}</div>
+    <div>
+      <div style="display:flex; gap:6px; align-items:flex-end;">
+        <div style="flex:1; min-width:0;"><div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80; height:11px;">RANGE START</div><input value="{{ fRs.value }}" onChange="{{ fRs.onChange }}" onKeyDown="{{ fRs.onKeyDown }}" onBlur="{{ fRs.onBlur }}" style="margin-top:2px; width:100%; height:22px; border:1px solid #d0d0c8; background:#fff; font:700 12px var(--mono); text-align:right; padding:0 4px; color:#1c1c1a;"></div>
+        <div style="flex:1; min-width:0;"><div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80; height:11px;">END (EXCL)</div><input value="{{ fRe.value }}" onChange="{{ fRe.onChange }}" onKeyDown="{{ fRe.onKeyDown }}" onBlur="{{ fRe.onBlur }}" style="margin-top:2px; width:100%; height:22px; border:1px solid #d0d0c8; background:#fff; font:700 12px var(--mono); text-align:right; padding:0 4px; color:#1c1c1a;"></div>
+      </div>
+      <div style="margin-top:6px; display:flex; gap:6px; align-items:center;">
+        <div onClick="{{ exportRange }}" style="height:24px; padding:0 10px; border-radius:4px; background:#fff; border:1px solid #d0d0c8; font:700 11px var(--sans); letter-spacing:.9px; display:flex; align-items:center; cursor:pointer; white-space:nowrap; flex:none;" style-hover="background:#eef2f7">EXPORT RANGE</div>
+        <div style="flex:1; font:10px var(--mono); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color: {{ exp.rangeColor }};">{{ exp.rangeNote }}</div>
+      </div>
+    </div>
+    <div style="height:1px; background:#e3e3dc;"></div>
+    <div style="display:flex; flex-direction:column; gap:6px;">
+      <div style="display:flex; align-items:center; gap:6px;">
+        <div style="width:56px; font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80;">BATCH</div>
+        <div style="flex:1; display:flex; gap:2px; height:22px; padding:1px; border:1px solid #d0d0c8; border-radius:4px; background:#e2e2db;">
+          <div onClick="{{ scPreset.onClick }}" style="flex:1; border-radius:3px; display:flex; align-items:center; justify-content:center; font:700 10px var(--mono); cursor:pointer; background: {{ scPreset.bg }}; color: {{ scPreset.fg }};">{{ scPreset.label }}</div>
+          <div onClick="{{ scSource.onClick }}" style="flex:1; border-radius:3px; display:flex; align-items:center; justify-content:center; font:700 10px var(--mono); cursor:pointer; background: {{ scSource.bg }}; color: {{ scSource.fg }};">SOURCE</div>
+        </div>
+      </div>
+      <div onClick="{{ toggleSkip }}" style="display:flex; align-items:center; gap:7px; cursor:pointer; padding-left:62px;">
+        <div style="width:15px; height:15px; border:1px solid #d0d0c8; border-radius:3px; background:#fff; display:flex; align-items:center; justify-content:center; color:#2e5c8a; font:700 11px var(--mono);">{{ skipMark }}</div>
+        <div style="font:11px var(--sans); color:#5c5c54;">skip existing files</div>
+      </div>
+      <div style="display:flex; gap:6px;">
+        <div onClick="{{ batchStart }}" style="flex:1; height:28px; border-radius:4px; font:700 11px var(--sans); letter-spacing:.9px; display:flex; align-items:center; justify-content:center; cursor:pointer; border:1px solid #d0d0c8; background: {{ batch.btnBg }}; color: {{ batch.btnFg }};">{{ batch.btnLabel }}</div>
+      </div>
+      <div style="height:12px; border:1px solid #d7d7d0; border-radius:3px; background:#e6e6df; overflow:hidden;"><div style="height:100%; background:#2e5c8a; transition:width .3s; width: {{ batch.pct }}%;"></div></div>
+      <div style="display:flex; font:11px var(--mono); color:#5c5c54;">
+        <div style="flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ batch.current }}</div>
+        <div style="font-weight:700; color:#1c1c1a;">{{ batch.count }}</div>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:1px; font:10px var(--mono); color:#a3a399;">
+        <sc-for list="{{ batch.log }}" as="l" hint-placeholder-count="4">
+          <div style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color: {{ l.c }};">{{ l.t }}</div>
+        </sc-for>
+      </div>
+    </div>
+    <div style="flex:1;"></div>
+    <div style="height:1px; background:#e3e3dc;"></div>
+    <div style="display:flex; flex-direction:column; gap:4px; min-height:0;">
+      <div style="display:flex; align-items:center; gap:6px; height:14px;">
+        <div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80; flex:1;">{{ meta.title }}</div>
+        <div style="height:14px; padding:0 4px; border-radius:2px; font:700 9px var(--mono); letter-spacing:.5px; display:flex; align-items:center; color:#fff; background: {{ meta.badgeBg }};">{{ meta.badge }}</div>
+      </div>
+      <div style="background:#fff; border:1px solid #e3e3dc; border-radius:4px; padding:8px 8px; display:flex; flex-direction:column; gap:3px; max-height:150px; overflow:auto;">
+        <sc-for list="{{ meta.rows }}" as="m" hint-placeholder-count="5">
+          <div style="display:flex; font:10px var(--mono); line-height:14px;">
+            <div style="width:44px; flex:none; color:#8a8a80;">{{ m.k }}</div>
+            <div style="flex:1; min-width:0; color:#1c1c1a; white-space:pre-wrap; word-break:break-word;">{{ m.v }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </div>
+  </div>
+
+  <!-- FOOTER 44 -->
+  <div style="height:44px; flex:none; background:#efefea; border-top:1px solid #d7d7d0; display:flex; align-items:center; gap:12px; padding:0 16px;">
+    <div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80; width:52px;">MASTER</div>
+    <div style="position:relative; width:200px; height:20px;">
+      <div style="position:absolute; left:0; top:7px; width:200px; height:6px; border-radius:3px; background:#dcdcd4;"></div>
+      <div style="position:absolute; left:0; top:7px; height:6px; border-radius:3px; background:#2e5c8a; width: {{ gainPx }}px;"></div>
+      <input type="range" min="0" max="1" step="0.01" value="{{ gain }}" onChange="{{ setGain }}" style="position:absolute; left:0; top:0; width:200px; height:20px; margin:0; opacity:0; cursor:pointer;">
+      <div style="position:absolute; top:2px; width:14px; height:16px; border-radius:3px; background:#fff; border:1px solid #b6b6ae; pointer-events:none; left: {{ thumbPx }}px;"></div>
+    </div>
+    <div style="font:700 12px var(--mono); width:56px;">{{ gainDb }}</div>
+    <div style="font:9px var(--mono); color:#a3a399;">v0.6.0-design · 2026-09-13</div>
+    <div style="flex:1;"></div>
+    <div style="font:10px var(--mono); color:#a3a399;">QWERTY piano Z–M · SPACE latch</div>
+    <div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80;">DEVICE</div>
+    <div style="height:28px; padding:0 10px; border:1px solid #d0d0c8; border-radius:4px; background:#fff; font:700 12px var(--mono); display:flex; align-items:center; gap:6px; white-space:nowrap;">Launchkey MK3 <span style="color:#a3a399;">▾</span></div>
+    <div style="font:500 10px var(--sans); letter-spacing:1px; color:#8a8a80;">MIDI IN</div>
+    <div style="height:28px; width:76px; border:1px solid #d0d0c8; border-radius:4px; background:#fff; font:700 12px var(--mono); display:flex; align-items:center; justify-content:center; gap:6px;">OMNI <span style="color:#a3a399;">▾</span></div>
+    <div style="display:flex; align-items:center; gap:6px; font:12px var(--mono); color:#5c5c54; width:104px; justify-content:flex-end;"><span style="width:8px; height:8px; border-radius:4px; background: {{ voiceDot }};"></span>{{ voices }}/16 voices</div>
+  </div>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1232,&quot;height&quot;:900},&quot;batchRunning&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Mock state&quot;},&quot;emptyFace&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Mock state&quot;}}">
+const NN = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const noteName = n => (n < 0 || n > 127 || n == null) ? '—' : NN[n % 12] + (Math.floor(n / 12) - 1);
+const parseNote = s => { const m = String(s).trim().match(/^([A-Ga-g])(#?)(-?\d+)$/); if (!m) { const n = parseInt(s); return isNaN(n) ? null : Math.max(0, Math.min(127, n)); } return (parseInt(m[3]) + 1) * 12 + NN.indexOf(m[1].toUpperCase() + m[2]); };
+const isBlack = n => [1, 3, 6, 8, 10].includes(n % 12);
+const ms = (f, r) => (f / r * 1000).toFixed(1) + ' ms';
+const ACC = '#2e5c8a', TXT = '#1c1c1a', TXT2 = '#5c5c54', TXT3 = '#a3a399', LBL = '#8a8a80', WARN = '#d9772b', OK = '#4c9a5e', SEL = '#dfe8f1';
+const BADGE = { sf2: ACC, it: OK, xm: OK, mod: OK, s3m: OK, wav: WARN, err: '#c2453a' };
+const KINDC = { fwd: TXT2, pp: ACC, off: TXT3, sus: WARN };
+const seed = s => { let h = 2166136261; for (const c of s) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); } return () => { h = Math.imul(h ^ (h >>> 15), 2246822507); h = Math.imul(h ^ (h >>> 13), 3266489909); return ((h ^= h >>> 16) >>> 0) / 4294967296; }; };
+
+// ---- mock sources -----------------------------------------------------------------------------
+const MODN = ['Jazz Piano1','Jazz Piano2','Jazz Piano3','Slap Bass','Kick 909','Snare Tight','HiHat Closed','HiHat Open','Strings Hi','Strings Lo','Choir Ahh','Flute Soft','Brass Stab','Pad Warm','Bell Glass','Guitar Nylon','Guitar Mute','Organ Perc','Clap','Tom Lo','Tom Hi','Crash','Ride','Sitar','Vox Ooh'];
+function mkModule() {
+  const r = seed('fall_in_love');
+  const samples = MODN.map((name, i) => {
+    const drum = /Kick|Snare|HiHat|Clap|Tom|Crash|Ride/.test(name);
+    const bits = r() < 0.7 ? 8 : 16, ch = i === 13 ? 2 : 1;
+    const c5 = drum ? 22050 + Math.round(r() * 800) : [8287, 8363, 16726, 22050, 29802, 11025, 12345][Math.floor(r() * 7)] + Math.round(r() * 300);
+    const frames = drum ? 4000 + Math.round(r() * 12000) : 12000 + Math.round(r() * 60000);
+    let kind = drum ? 'off' : 'fwd'; if (i === 2) kind = 'pp'; if (i === 13) kind = 'sus';
+    const ls = kind === 'off' ? 0 : Math.round(frames * (0.35 + r() * 0.3)), le = kind === 'off' ? frames - 1 : frames - 1 - Math.round(r() * frames * 0.05);
+    return { key: 'mod:' + (i + 1), src: 'mod', idx: i + 1, name, bits, ch, rate: c5, frames, loopStart: ls, loopEnd: le, kind, root: 60, fine: 0, env: drum ? 'perc' : (/Pad|Strings|Choir|Vox|Organ/.test(name) ? 'flat' : 'decay'), tone: r() * 6 };
+  });
+  return { id: 'mod', type: 'it', file: 'fall_in_love.it', samples, title: 'fall in love (final mix)', format: 'Impulse Tracker 2.14', message: 'made with IT 2.14 on a 486\ntracked 1997-03, samples from\nthe Ensoniq EPS + gm.sf2\ngreets to all in #trax', instruments: 25 };
+}
+function mkSf2() {
+  const names = ['Dream Pad','Analog Brass','Grand Piano','Jazz Piano1','E.Piano Tine','Slap Bass','Strings Ens','Choir Aahs','Sync Lead'];
+  const presets = names.map((name, p) => {
+    const r = seed(name);
+    const stem = name.split(' ')[0].replace('.', '');
+    const zones = [[0,35,24],[36,59,48],[60,83,72],[84,127,96]].map(([lo, hi, root], z) => {
+      const frames = 14000 + Math.round(r() * 30000), ls = Math.round(frames * (0.5 + r() * 0.3)), le = frames - 1 - Math.round(r() * 400);
+      return { key: `sf2:${p}:${z}`, src: 'sf2', preset: p, idx: z + 1, name: `${stem}_${noteName(root)}`, bits: 16, ch: 1, rate: 22050, frames, loopStart: ls, loopEnd: le, kind: 'fwd', root, fine: Math.round((r() - 0.5) * 20), lo, hi, env: /Pad|Strings|Choir|Lead/.test(name) ? 'flat' : 'decay', tone: r() * 6 };
+    });
+    return { id: `000:00${p}`, name, zones };
+  });
+  return { id: 'sf2', type: 'sf2', file: 'Vintage_Dreams_Waves_v2.sf2', presets, info: { INAM: 'Vintage Dreams Waves v2', IENG: 'Ian Wilson', ICOP: '(c) 1998 Ian Wilson', ICMT: 'GM-compatible wavetable, 22 kHz', ISFT: 'Vienna 2.3' } };
+}
+const WAV = { id: 'wav', type: 'wav', file: 'ROM_PAD_C3.wav', sample: { key: 'wav', src: 'wav', idx: 1, name: 'ROM_PAD_C3', bits: 24, ch: 2, rate: 44100, frames: 132300, loopStart: 41000, loopEnd: 98303, kind: 'fwd', root: 48, fine: 0, env: 'flat', tone: 2.2 } };
+const ERR = { id: 'err', type: 'err', file: 'eternity.xm', error: 'not a recognised tracker module' };
+
+// ---- synthetic signal -------------------------------------------------------------------------
+function period(s) { return s.rate / (440 * Math.pow(2, (s.root + s.fine / 100 - 69) / 12)); }
+function val(s, f) {
+  if (f < 0 || f >= s.frames) return 0;
+  const P = period(s), t = f / s.frames, ph = 2 * Math.PI * f / P;
+  let env = 1;
+  if (s.env === 'perc') env = Math.exp(-6 * t);
+  else if (s.env === 'decay') env = t < 0.015 ? t / 0.015 : 0.2 + 0.8 * Math.exp(-2.4 * (t - 0.015));
+  else env = t < 0.08 ? t / 0.08 : 1 - 0.1 * t;
+  const h = Math.sin(ph) * 0.62 + Math.sin(2 * ph + s.tone) * 0.24 + Math.sin(3 * ph + 1) * 0.1 + Math.sin(0.5 * ph) * 0.06;
+  const noise = s.env === 'perc' ? Math.sin(f * 12.9898 + s.tone) * Math.sin(f * 78.233) * 0.5 : 0;
+  return 0.9 * env * (h + noise);
+}
+function nearestZero(s, f) { let best = f, bd = 1e9; for (let d = -64; d <= 64; d++) { const g = f + d; if (g < 1 || g >= s.frames) continue; const a = val(s, g - 1), b = val(s, g); if (a <= 0 && b > 0 && Math.abs(d) < bd) { bd = Math.abs(d); best = g; } } return best; }
+
+class Component extends DCLogic {
+  constructor(p) {
+    super(p);
+    const mod = mkModule(), sf2 = mkSf2();
+    this.sources = [sf2, mod, WAV, ERR];
+    this.state = {
+      expanded: { sf2: true, mod: true, wav: true }, selSrc: 'mod', selPreset: 2, cur: 'mod:3',
+      slotA: 'mod:3', slotB: 'sf2:2:2', kb: 'split', split: 60, toggleOn: 'A', mode: 0,
+      edits: {}, snap: true, playing: false, playhead: 0, lastNote: { A: 60, B: 62 }, lastSf2Note: 62,
+      view: null, drag: null, cursor: null, status: 'loaded fall_in_love.it · 25 samples', statusKind: 'ok',
+      drafts: {}, gain: 0.72, voices: 2,
+      exp: { folder: 'D:\\samples\\reference\\fall_in_love', quick: 'reference', fmt: 'native', fold: 'sum', rs: 25664, re: 41404, scope: 'source', skip: true },
+      batch: { running: this.props.batchRunning ?? true, done: 17, total: 25, skipped: 3, log: [] },
+      loopOverride: {}, dirtyWav: false
+    };
+    this.state.batch.log = ['fall_in_love_15_Bell_Glass_C4.wav', 'fall_in_love_16_Guitar_Nylon_C4.wav', 'fall_in_love_17_Guitar_Mute_C4.wav'].map(t => ({ t, c: TXT3 }));
+  }
+  componentDidMount() {
+    this.timer = setInterval(() => this.tick(), 90);
+    this.btimer = setInterval(() => this.batchTick(), 1800);
+  }
+  componentWillUnmount() { clearInterval(this.timer); clearInterval(this.btimer); }
+  componentDidUpdate(pp) {
+    if (pp.batchRunning !== this.props.batchRunning && this.props.batchRunning != null) this.setState(s => ({ batch: { ...s.batch, running: this.props.batchRunning } }));
+    if (pp.emptyFace !== this.props.emptyFace && this.props.emptyFace) this.setState({ selSrc: null, cur: null, slotA: null, slotB: null, status: '' });
+    if (pp.emptyFace !== this.props.emptyFace && !this.props.emptyFace) this.setState({ selSrc: 'mod', cur: 'mod:3', slotA: 'mod:3', slotB: 'sf2:2:2', status: 'loaded fall_in_love.it · 25 samples', statusKind: 'ok' });
+  }
+  // ---- lookups
+  find(key) {
+    if (!key) return null;
+    const [src, a, b] = key.split(':');
+    const S = this.sources.find(x => x.id === src); if (!S) return null;
+    let base = null;
+    if (src === 'sf2') base = S.presets[+a]?.zones[+b]; else if (src === 'mod') base = S.samples[+a - 1]; else if (src === 'wav') base = S.sample;
+    if (!base) return null;
+    const e = this.state.edits[key] || {};
+    return { ...base, ...e, kind: this.state.loopOverride[key] || base.kind, orig: base };
+  }
+  pathOf(s) { if (!s) return '—'; const S = this.sources.find(x => x.id === s.src); if (s.src === 'sf2') return `${S.file} ▸ ${S.presets[s.preset].name} ▸ ${s.name}`; if (s.src === 'mod') return `${S.file} ▸ ${String(s.idx).padStart(2, '0')} ${s.name}`; return S.file; }
+  typeOf(s) { return s ? this.sources.find(x => x.id === s.src).type : 'err'; }
+  edit(key, patch) { this.setState(s => ({ edits: { ...s.edits, [key]: { ...(s.edits[key] || {}), ...patch } }, dirtyWav: key === 'wav' ? true : s.dirtyWav })); }
+  setStatus(text, kind) { this.setState({ status: text, statusKind: kind || 'ok' }); }
+  // ---- playback mock
+  tick() {
+    if (!this.state.playing) return;
+    const s = this.find(this.state.cur); if (!s) return;
+    let p = this.state.playhead + s.rate * 0.09 * 0.25;
+    if (s.kind !== 'off' && p > s.loopEnd) p = s.loopStart + (p - s.loopEnd) % Math.max(1, s.loopEnd - s.loopStart);
+    if (p >= s.frames) { p = 0; if (s.kind === 'off') this.setState({ playing: false }); }
+    this.setState({ playhead: p });
+  }
+  batchTick() {
+    const b = this.state.batch; if (!b.running) return;
+    if (b.done >= b.total) { if (this.props.batchRunning) return this.setState({ batch: { ...b, done: 0, log: [] } }); this.setState({ batch: { ...b, running: false, log: [{ t: `done · ${b.total - b.skipped} written · ${b.skipped} skipped`, c: OK }, ...b.log].slice(0, 4) } }); return; }
+    const S = this.sources.find(x => x.id === 'mod'), smp = S.samples[b.done];
+    const name = `fall_in_love_${String(smp.idx).padStart(2, '0')}_${smp.name.replace(/\s+/g, '_')}_C4.wav`;
+    this.setState({ batch: { ...b, done: b.done + 1, log: [{ t: name, c: TXT3 }, ...b.log].slice(0, 4) } });
+  }
+  // ---- waveform geometry
+  W = 910; H = 138;
+  viewOf(s) { return this.state.view && this.state.view.key === s.key ? this.state.view : { key: s.key, v0: 0, v1: s.frames }; }
+  xOf(s, f) { const v = this.viewOf(s); return (f - v.v0) / (v.v1 - v.v0) * this.W; }
+  fOf(s, x) { const v = this.viewOf(s); return Math.round(v.v0 + x / this.W * (v.v1 - v.v0)); }
+  wavePath(s) {
+    const v = this.viewOf(s), fpp = (v.v1 - v.v0) / this.W, mid = this.H / 2, half = this.H * 0.46;
+    let d = '';
+    for (let x = 0; x < this.W; x++) {
+      const f0 = v.v0 + x * fpp; let mn = 1e9, mx = -1e9;
+      const n = fpp > 12 ? 10 : Math.max(1, Math.ceil(fpp)) + 1;
+      for (let i = 0; i < n; i++) { const y = val(s, Math.floor(f0 + fpp * i / n)); if (y < mn) mn = y; if (y > mx) mx = y; }
+      if (mn > mx) continue;
+      d += `M${x + .5},${(mid - mx * half).toFixed(1)}L${x + .5},${(mid - mn * half + 0.6).toFixed(1)}`;
+    }
+    return d;
+  }
+  seamPaths(s) {
+    const win = Math.round(s.rate * 0.02), halfW = Math.round(win / 2), mid = 46, amp = 28;
+    const L = [], R = [];
+    for (let x = 0; x <= 149; x++) { const f = s.loopEnd - halfW + Math.round(x / 149 * halfW); L.push(`${x === 0 ? 'M' : 'L'}${x},${(mid - val(s, f) * amp).toFixed(1)}`); }
+    for (let x = 0; x <= 149; x++) { const f = s.loopStart + Math.round(x / 149 * halfW); R.push(`${x === 0 ? 'M' : 'L'}${149 + x},${(mid - val(s, f) * amp).toFixed(1)}`); }
+    return { left: L.join(''), right: R.join(''), step: Math.abs(val(s, s.loopEnd) - val(s, s.loopStart)).toFixed(3) };
+  }
+  clickRatio(s) {
+    const step = Math.abs(val(s, s.loopEnd) - val(s, s.loopStart)) + Math.abs((val(s, s.loopEnd) - val(s, s.loopEnd - 1)) - (val(s, s.loopStart + 1) - val(s, s.loopStart))) * 0.5;
+    const typ = Math.abs(val(s, s.loopStart + 1) - val(s, s.loopStart)) + 0.02;
+    return step / (typ * 4);
+  }
+  loudness(s) { let acc = 0, n = 0; const len = s.loopEnd - s.loopStart + 1, st = Math.max(1, Math.floor(len / 400)); for (let f = s.loopStart; f <= s.loopEnd; f += st) { const v = val(s, f); acc += v * v; n++; } return n ? 20 * Math.log10(Math.sqrt(acc / n) + 1e-6) : -99; }
+  // ---- field helper
+  field(id, get, commit, num) {
+    const d = this.state.drafts;
+    const cur = d[id] != null ? d[id] : String(get());
+    return {
+      value: cur,
+      onChange: e => this.setState(s => ({ drafts: { ...s.drafts, [id]: e.target.value } })),
+      onKeyDown: e => { e.stopPropagation(); if (e.key === 'Enter') { this.commitField(id, commit, num); e.target.blur(); } if (e.key === 'Escape') { this.setState(s => { const dr = { ...s.drafts }; delete dr[id]; return { drafts: dr }; }); e.target.blur(); } },
+      onBlur: () => this.commitField(id, commit, num)
+    };
+  }
+  commitField(id, commit, num) {
+    const v = this.state.drafts[id]; if (v == null) return;
+    this.setState(s => { const dr = { ...s.drafts }; delete dr[id]; return { drafts: dr }; });
+    if (num) { const n = parseFloat(v); if (isNaN(n)) return; commit(n); } else commit(v);
+  }
+  // ---- actions
+  seg(cur, v, onClick, label) { const on = cur === v; return { bg: on ? ACC : 'transparent', fg: on ? '#fff' : TXT2, onClick, label }; }
+  select(key) { const s = this.find(key); if (!s) return; this.setState({ cur: key, selSrc: s.src, selPreset: s.src === 'sf2' ? s.preset : this.state.selPreset, playhead: 0, view: null, exp: { ...this.state.exp, rs: s.loopStart, re: s.loopEnd + 1 } }); }
+  play(key, note) {
+    const s = this.find(key); if (!s) return;
+    const slot = key === this.state.slotA ? 'A' : key === this.state.slotB ? 'B' : null;
+    const ln = { ...this.state.lastNote }; if (slot) ln[slot] = note;
+    this.setState({ cur: key, selSrc: s.src, playing: true, playhead: this.state.mode === 1 ? s.loopStart : 0, lastNote: ln, lastSf2Note: s.src === 'sf2' ? note : this.state.lastSf2Note, voices: Math.min(16, this.state.voices + 1) });
+    setTimeout(() => this.setState(st => ({ voices: Math.max(0, st.voices - 1) })), 900);
+  }
+  currentList() {
+    const S = this.sources.find(x => x.id === this.state.selSrc); if (!S) return [];
+    if (S.type === 'sf2') return S.presets[this.state.selPreset]?.zones.map(z => z.key) || [];
+    if (S.type === 'wav') return ['wav']; if (S.type === 'err') return []; return S.samples.map(z => z.key);
+  }
+  step(d) { const list = this.currentList(); const i = list.indexOf(this.state.cur); if (i < 0 && list.length) return this.select(list[0]); const n = list[(i + d + list.length) % list.length]; if (n) this.select(n); }
+  nudge(which, d) { const s = this.find(this.state.cur); if (!s) return; if (which === 'start') this.edit(s.key, { loopStart: Math.max(0, Math.min(s.loopEnd - 1, s.loopStart + d)) }); else this.edit(s.key, { loopEnd: Math.max(s.loopStart + 1, Math.min(s.frames - 1, s.loopEnd + d)) }); }
+  onKey = e => {
+    if (e.target.tagName === 'INPUT') return;
+    const k = e.key, s = this.find(this.state.cur);
+    const map = { f: 'fwd', p: 'pp', o: 'off' };
+    if (map[k.toLowerCase()] && s) { this.setState(st => ({ loopOverride: { ...st.loopOverride, [s.key]: map[k.toLowerCase()] } })); e.preventDefault(); return; }
+    if (k === '[') this.nudge('start', -1); else if (k === ']') this.nudge('start', 1); else if (k === '{') this.nudge('start', -100); else if (k === '}') this.nudge('start', 100);
+    else if (k === ';') this.nudge('end', -1); else if (k === "'") this.nudge('end', 1); else if (k === ':') this.nudge('end', -100); else if (k === '"') this.nudge('end', 100);
+    else if (k === ',') this.step(-1); else if (k === '.') this.step(1);
+    else if (k === 'Tab') { e.preventDefault(); this.setState(st => ({ kb: 'toggle', toggleOn: st.toggleOn === 'A' ? 'B' : 'A' })); }
+    else if (k === ' ') { e.preventDefault(); if (s) { if (this.state.playing) this.setState({ playing: false }); else this.play(s.key, s.root); } }
+    else if (k.toLowerCase() === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.shiftKey ? this.saveAs() : this.save(); }
+    else if (k.toLowerCase() === 'l' && !e.ctrlKey) this.setState(st => ({ mode: st.mode ? 0 : 1 }));
+    else return;
+    e.preventDefault();
+  };
+  saveTarget() { const s = this.find(this.state.cur); if (!s) return { ok: false, why: 'nothing selected' }; if (s.src !== 'wav') return { ok: false, why: `${this.typeOf(s).toUpperCase()} is a read-only container — use EXPORT SAMPLE` }; return { ok: true, why: 'write smpl + bext back into ' + this.pathOf(s) }; }
+  save = () => { const t = this.saveTarget(); if (!t.ok) return this.setStatus(t.why, 'warn'); this.setState({ dirtyWav: false }); this.setStatus('saved ROM_PAD_C3.wav · smpl 41000–98303 fwd · bext updated', 'ok'); };
+  saveAs = () => { const s = this.find(this.state.cur); if (!s) return; const pre = (this.state.edits[s.key]?.prefix || s.name.replace(/\s+/g, '_').toUpperCase()); this.setStatus(`save as ${pre}_${noteName(s.root)}.wav → ${this.state.exp.folder}`, 'ok'); };
+  suggest = () => {
+    const s = this.find(this.state.cur); if (!s) return;
+    const win = Math.round(s.rate * 0.2); let best = s.loopEnd, bs = 1e9;
+    const a = val(s, s.loopStart), da = val(s, s.loopStart + 1) - a;
+    for (let e = Math.max(s.loopStart + 100, s.loopEnd - win); e <= Math.min(s.frames - 2, s.loopEnd + win); e++) { const b = val(s, e), db = val(s, e + 1) - b; const sc = Math.abs(b - a) * 3 + Math.abs(db - da) * 6; if (sc < bs) { bs = sc; best = e; } }
+    this.edit(s.key, { loopEnd: best }); this.setStatus(`SUGGEST: END ${s.loopEnd} → ${best} (score ${bs.toFixed(3)})`, 'ok');
+  };
+  autoRoot = () => { const s = this.find(this.state.cur); if (!s) return; const f = s.rate / period(s.orig) * (1 + (seed(s.name)() - 0.5) * 0.004); const m = 69 + 12 * Math.log2(f / 440); const root = Math.round(m), fine = Math.round((m - root) * 100); this.edit(s.key, { root, fine }); this.setStatus(`AUTO-DETECT: ${f.toFixed(1)} Hz → ${noteName(root)} ${fine >= 0 ? '+' : ''}${fine}c`, 'ok'); };
+  // ---- waveform mouse
+  waveRef = el => { this.waveEl = el; };
+  wx(e) { const r = this.waveEl.getBoundingClientRect(); const k = r.width / 912; return Math.max(0, Math.min(this.W, (e.clientX - r.left) / k - 1)); }
+  waveDown = e => {
+    const s = this.find(this.state.cur); if (!s) return; e.preventDefault(); this.waveEl.parentElement.parentElement.parentElement.parentElement.focus();
+    const x = this.wx(e), f = this.fOf(s, x);
+    if (e.shiftKey || e.button === 1) return this.setState({ drag: { kind: 'pan', x0: x, view: this.viewOf(s) } });
+    if (e.button === 2) { this.edit(s.key, { loopEnd: Math.max(s.loopStart + 1, Math.min(s.frames - 1, f)) }); return this.setState({ drag: { kind: 'end' } }); }
+    const ds = Math.abs(this.xOf(s, s.loopStart) - x), de = Math.abs(this.xOf(s, s.loopEnd + 1) - x);
+    const kind = ds <= de ? 'start' : 'end';
+    this.edit(s.key, kind === 'start' ? { loopStart: Math.max(0, Math.min(s.loopEnd - 1, f)) } : { loopEnd: Math.max(s.loopStart + 1, Math.min(s.frames - 1, f)) });
+    this.setState({ drag: { kind } });
+  };
+  waveMove = e => {
+    const s = this.find(this.state.cur); if (!s) return; const x = this.wx(e), f = this.fOf(s, x), d = this.state.drag;
+    if (!d) return this.setState({ cursor: f });
+    if (d.kind === 'pan') { const span = d.view.v1 - d.view.v0, df = (d.x0 - x) / this.W * span; let v0 = Math.max(0, Math.round(d.view.v0 + df)); v0 = Math.min(v0, s.frames - span); return this.setState({ cursor: f, view: { key: s.key, v0, v1: v0 + span } }); }
+    if (d.kind === 'start') this.edit(s.key, { loopStart: Math.max(0, Math.min(s.loopEnd - 1, f)) }); else this.edit(s.key, { loopEnd: Math.max(s.loopStart + 1, Math.min(s.frames - 1, f)) });
+    this.setState({ cursor: f });
+  };
+  waveUp = () => {
+    const d = this.state.drag; if (!d) return; const s = this.find(this.state.cur);
+    if (s && this.state.snap && (d.kind === 'start' || d.kind === 'end')) { const k = d.kind === 'start' ? 'loopStart' : 'loopEnd'; this.edit(s.key, { [k]: nearestZero(s, s[k]) }); }
+    this.setState({ drag: null });
+  };
+  waveWheel = e => {
+    const s = this.find(this.state.cur); if (!s) return; e.preventDefault();
+    const v = this.viewOf(s), x = this.wx(e), f = this.fOf(s, x), z = e.deltaY > 0 ? 1.25 : 0.8;
+    let span = Math.max(64, Math.min(s.frames, Math.round((v.v1 - v.v0) * z)));
+    let v0 = Math.round(f - (x / this.W) * span); v0 = Math.max(0, Math.min(s.frames - span, v0));
+    this.setState({ view: { key: s.key, v0, v1: v0 + span } });
+  };
+  noMenu = e => e.preventDefault();
+
+  renderVals() {
+    const st = this.state, cur = this.find(st.cur), A = this.find(st.slotA), B = this.find(st.slotB);
+    const kbEn = { A: !!A, B: !!B, split: !!(A && B), toggle: !!(A && B) };
+    const kbSeg = v => { const on = st.kb === v, en = kbEn[v]; return { bg: on ? (en ? ACC : '#b6b6ae') : 'transparent', fg: on ? '#fff' : (en ? TXT2 : TXT3), onClick: () => en && this.setState({ kb: v }) }; };
+    // tree
+    const treeRows = [];
+    for (const S of this.sources) {
+      const open = !!st.expanded[S.id], selected = st.selSrc === S.id;
+      const isErr = S.type === 'err';
+      const count = S.type === 'sf2' ? `${S.presets.length} presets` : S.type === 'wav' ? `${S.sample.bits}b ${S.sample.ch === 2 ? 'st' : 'mo'}` : S.type === 'err' ? '' : `${S.samples.length} smp`;
+      treeRows.push({ key: S.id, pad: 8, caret: S.type === 'sf2' ? (open ? '▾' : '▸') : (isErr ? '!' : '●'), badge: S.type.toUpperCase(), badgeBg: BADGE[S.type], label: isErr ? `${S.file} — ${S.error}` : S.file, sub: count, font: `${isErr ? '' : '500 '}12px var(--sans)`, fg: isErr ? '#c2453a' : TXT, bg: selected && !isErr ? SEL : 'transparent',
+        onClick: () => { if (isErr) return this.setStatus(`ERROR: ${S.file}: ${S.error}`, 'warn'); const list = S.type === 'sf2' ? S.presets[st.selPreset].zones.map(z => z.key) : S.type === 'wav' ? ['wav'] : S.samples.map(z => z.key); this.setState(s => ({ expanded: { ...s.expanded, [S.id]: S.type === 'sf2' ? (selected ? !open : true) : true }, selSrc: S.id })); if (!list.includes(st.cur)) this.select(list[0]); } });
+      if (S.type === 'sf2' && open) S.presets.forEach((p, i) => treeRows.push({ key: p.id, pad: 26, caret: '', badge: p.id, badgeBg: '#a3a399', label: p.name, sub: `${p.zones.length} zn`, font: '12px var(--sans)', fg: TXT, bg: selected && st.selPreset === i ? SEL : 'transparent',
+        onClick: () => { this.setState({ selSrc: 'sf2', selPreset: i }); this.select(p.zones[0].key); } }));
+    }
+    // contents list
+    const S = this.sources.find(x => x.id === st.selSrc);
+    let listKind = 'SAMPLES', listTitle = '—', keys = [];
+    if (S && S.type === 'sf2') { listKind = 'ZONES OF PRESET'; listTitle = `${S.presets[st.selPreset].id}  ${S.presets[st.selPreset].name}`; keys = S.presets[st.selPreset].zones.map(z => z.key); }
+    else if (S && S.type === 'wav') { listKind = 'WAV SAMPLE'; listTitle = S.file; keys = ['wav']; }
+    else if (S && S.type !== 'err') { listKind = `${S.type.toUpperCase()} SAMPLES · ${S.samples.length}`; listTitle = S.file; keys = S.samples.map(z => z.key); }
+    const listRows = keys.map(k => { const s = this.find(k); return { idx: String(s.idx).padStart(2, '0'), idxColor: k === st.cur ? ACC : TXT3, name: s.src === 'sf2' ? `${s.name}  ${noteName(s.lo)}–${noteName(s.hi)}` : s.name, fmt: `${s.bits}b ${s.ch === 2 ? 'st' : 'mo'}`, frames: String(s.frames), kind: s.kind, kindColor: KINDC[s.kind], rate: String(s.rate), bg: k === st.cur ? SEL : 'transparent', showA: k === st.slotA ? 'inline' : 'none', showB: k === st.slotB ? 'inline' : 'none', onClick: () => this.select(k), onPlay: () => this.play(k, s.root) }; });
+    // readout
+    const col = (slot, s, live) => {
+      const badgeT = s ? this.typeOf(s) : 'err';
+      const ln = st.lastNote[slot], sm = s && ln != null ? ln - s.root : 0;
+      const rows = s ? (() => { const len = s.loopEnd - s.loopStart + 1, per = len / period(s), ni = Math.abs(per - Math.round(per)) < 0.05; return [
+        ['source', `${this.sources.find(x => x.id === s.src).file} (${badgeT})`, TXT],
+        ['format', `${s.rate} Hz  ${s.bits}-bit  ${s.ch === 2 ? 'stereo' : 'mono'}`, TXT],
+        ['length', `${s.frames}  ${ms(s.frames, s.rate)}`, TXT],
+        ['loopStart', `${s.loopStart}  ${ms(s.loopStart, s.rate)}`, TXT],
+        ['loopEnd', `${s.loopEnd}  ${ms(s.loopEnd, s.rate)}`, TXT],
+        ['loop len', `${len}  ${ms(len, s.rate)}  ${per.toFixed(2)} per`, ni ? TXT : WARN],
+        ['loop type', { fwd: 'forward', pp: 'ping-pong', off: 'off (one-shot)', sus: 'forward + sustain loop' }[s.kind] + (st.loopOverride[s.key] ? ' (override)' : ''), TXT],
+        s.src === 'sf2' ? ['zone', `${noteName(s.lo)}–${noteName(s.hi)}  vel 1–127`, TXT] : ['loudness', `${this.loudness(s).toFixed(1)} dB RMS`, TXT],
+      ].map(([k, v, c]) => ({ k, v, c })); })() : [];
+      return { slot, slotBg: slot === 'A' ? ACC : TXT2, badge: s ? badgeT.toUpperCase() : '—', badgeBg: s ? BADGE[badgeT] : '#c2c2ba', path: s ? this.pathOf(s) : `slot ${slot} empty`, liveDot: live ? OK : '#c2c2ba',
+        played: s && ln != null ? noteName(ln) : '—', root: s ? noteName(s.root) : '—', fine: s && s.fine ? `${s.fine > 0 ? '+' : ''}${s.fine}c` : '', stretch: s && ln != null ? `${sm > 0 ? '+' : ''}${sm} st` : '—', stretchColor: Math.abs(sm) > 7 ? WARN : TXT,
+        rows, empty: !s, emptyMsg: `Select a sample and press → ${slot}. With both slots set, KEYBOARD PLAYS offers SPLIT (below the split note → A, at/above → B) and TOGGLE (TAB swaps).`, border: slot === 'A' ? '1px solid #e3e3dc' : 'none', padR: slot === 'A' ? 14 : 0 };
+    };
+    const liveA = st.kb === 'A' || st.kb === 'split' || (st.kb === 'toggle' && st.toggleOn === 'A');
+    const liveB = st.kb === 'B' || st.kb === 'split' || (st.kb === 'toggle' && st.toggleOn === 'B');
+    // zone strip
+    const sfSlot = A && A.src === 'sf2' ? A : B && B.src === 'sf2' ? B : null;
+    const sf2 = this.sources[0];
+    const zones = sfSlot ? sf2.presets[sfSlot.preset].zones : [];
+    const zoneOf = n => zones.findIndex(z => n >= z.lo && n <= z.hi);
+    const zoneCells = Array.from({ length: 128 }, (_, n) => { const zi = zoneOf(n), sel = sfSlot && n === st.lastSf2Note, isSplit = st.kb === 'split' && n === st.split; return {
+      bg: sel ? ACC : isSplit ? '#d9772b' : zones.length === 0 ? '#e7edf4' : zi < 0 ? '#fff' : zi % 2 === 0 ? '#cfdcea' : '#e7edf4', black: isBlack(n) ? 1 : 0, cMark: n % 12 === 0 ? 1 : 0, edge: zi >= 0 && zones[zi].hi === n ? '1px solid #7d8a97' : 'none', title: `${noteName(n)}${zi >= 0 ? ' · ' + zones[zi].name : ''}`,
+      onClick: () => { if (!sfSlot) return; const z = zones[zoneOf(n)]; if (z) this.play(z.key, n); } }; });
+    const cellW = 910 / 128;
+    const zoneLabels = zones.map(z => ({ left: Math.floor(z.lo * cellW), width: Math.floor((z.hi - z.lo + 1) * cellW), name: z.name, range: `${noteName(z.lo)}–${noteName(z.hi)}  root ${noteName(z.root)}` }));
+    // editor
+    const lp = v => this.seg(cur?.kind, v, () => cur && this.setState(s => ({ loopOverride: { ...s.loopOverride, [cur.key]: v } })));
+    let wv = { path: '', regionL: 0, regionW: 0, startX: -9, endX: -9, playX: -9, playOp: 0, viewLabel: 'drop a source or pick a sample', zoomHint: '' }, seam = { left: '', right: '', step: '—', ms: 20 }, periods = '—', periodsColor = TXT, periodsBg = '#fff', click = { g: '#e6e6df', y: '#e6e6df', r: '#e6e6df', v: '—' }, loud = '—', cursorLine = '';
+    if (cur) {
+      const v = this.viewOf(cur), x0 = this.xOf(cur, cur.loopStart), x1 = this.xOf(cur, cur.loopEnd + 1);
+      wv = { path: this.wavePath(cur), regionL: Math.max(0, x0), regionW: Math.max(0, Math.min(this.W, x1) - Math.max(0, x0)), startX: x0 - 1, endX: x1 - 1, playX: this.xOf(cur, st.playhead) - 1, playOp: st.playing ? 1 : 0, viewLabel: `${v.v0} .. ${v.v1}  (${((v.v1 - v.v0) / this.W).toFixed(1)} smp/px)`, zoomHint: v.v1 - v.v0 < cur.frames ? 'wheel zoom · shift-drag pan' : 'wheel to zoom' };
+      seam = { ...this.seamPaths(cur), ms: 20 };
+      const len = cur.loopEnd - cur.loopStart + 1, per = len / period(cur), ni = Math.abs(per - Math.round(per)) < 0.05;
+      periods = per.toFixed(2); periodsColor = ni ? TXT : WARN; periodsBg = ni ? '#fff' : '#fbeee2';
+      const cr = this.clickRatio(cur), lvl = cr < 1 ? 0 : cr <= 2 ? 1 : 2;
+      click = { g: lvl >= 0 ? OK : '#e6e6df', y: lvl >= 1 ? '#d9b52b' : '#e6e6df', r: lvl >= 2 ? '#c2453a' : '#e6e6df', v: cr.toFixed(2) };
+      loud = `${this.loudness(cur).toFixed(1)} dB`;
+      const c = st.cursor != null ? st.cursor : st.playhead;
+      cursorLine = `cursor ${Math.round(c)} smp  ${ms(c, cur.rate)}   root ${noteName(cur.root)}   loop ${len} smp  ${ms(len, cur.rate)}  ${per.toFixed(2)} periods`;
+    }
+    const F = (id, get, set, num = true) => this.field(id, get, set, num);
+    const clampS = n => cur ? Math.max(0, Math.min(cur.loopEnd - 1, Math.round(n))) : 0;
+    const clampE = n => cur ? Math.max(cur.loopStart + 1, Math.min(cur.frames - 1, Math.round(n))) : 0;
+    const saveT = this.saveTarget();
+    // export
+    const ex = st.exp, b = st.batch;
+    const setExp = patch => this.setState(s => ({ exp: { ...s.exp, ...patch } }));
+    const exSeg = (k, v) => this.seg(ex[k], v, () => setExp({ [k]: v }));
+    const quick = (v, folder) => this.seg(ex.quick, v, () => setExp({ quick: v, folder }));
+    const rangeLen = ex.re - ex.rs, rangeOut = cur && (cur.loopStart < ex.rs || cur.loopEnd >= ex.re);
+    const scopeLabel = S && S.type === 'sf2' ? 'PRESET' : S && S.type === 'wav' ? 'FILE' : 'MODULE';
+    const meta = (() => { const M = cur ? this.sources.find(x => x.id === cur.src) : null; if (!M) return { title: 'METADATA', badge: '—', badgeBg: '#c2c2ba', rows: [{ k: '', v: 'no source selected' }] };
+      if (M.type === 'sf2') return { title: 'SF2 INFO', badge: 'SF2', badgeBg: BADGE.sf2, rows: Object.entries(M.info).map(([k, v]) => ({ k, v })) };
+      if (M.type === 'wav') return { title: 'WAV CHUNKS', badge: 'WAV', badgeBg: BADGE.wav, rows: [{ k: 'smpl', v: 'loop 41000–98303 fwd · unity 48' }, { k: 'bext', v: 'Originator Scout v2 · 2026-09-11' }, { k: 'cue', v: '2 markers' }] };
+      return { title: 'MODULE INFO', badge: M.type.toUpperCase(), badgeBg: BADGE[M.type], rows: [{ k: 'format', v: M.format }, { k: 'title', v: M.title }, { k: 'message', v: M.message }, { k: 'instr', v: `${M.instruments} instruments · ${M.samples.length} samples` }] }; })();
+    const gainDb = st.gain > 0 ? (20 * Math.log10(st.gain)).toFixed(1) + ' dB' : '-inf dB';
+    const scale = (this.props.scale ?? 100) / 100;
+    return {
+      scale, scalePct: Math.round(scale * 100) + ' %', scaledW: Math.round(1202 * scale), scaledH: Math.round(842 * scale), outerW: Math.round(1202 * scale) + 32,
+      hint: 'click a sample to edit · double-click or SPACE plays · drag START/END on the waveform · TAB swaps A/B',
+      onKey: this.onKey,
+      sourceSummary: [`${sf2.file}`, 'fall_in_love.it', 'ROM_PAD_C3.wav'].join(' · '),
+      loadSource: () => this.setStatus('LOAD: native file browser (sf2 · it xm mod s3m … · wav)', 'ok'),
+      unloadSource: () => this.setStatus(S ? `UNLOAD ${S.file}: also clears its A/B slots` : 'nothing selected', 'warn'),
+      kbA: kbSeg('A'), kbB: kbSeg('B'), kbSplit: kbSeg('split'), kbToggle: kbSeg('toggle'),
+      fSplit: F('split', () => noteName(st.split), v => { const n = parseNote(v); if (n != null) this.setState({ split: n }); }, false), splitOpacity: st.kb === 'split' ? 1 : 0.45,
+      modeAuth: this.seg(st.mode, 0, () => this.setState({ mode: 0 })), modeLoop: this.seg(st.mode, 1, () => this.setState({ mode: 1 })),
+      treeRows, listKind, listTitle, listRows, listEmpty: listRows.length === 0, listEmptyMsg: S && S.type === 'err' ? `ERROR: ${S.file}: ${S.error}. Previous state kept.` : 'No source selected.',
+      assignA: () => cur && this.setState({ slotA: cur.key, lastNote: { ...st.lastNote, A: null } }), assignB: () => cur && this.setState({ slotB: cur.key, lastNote: { ...st.lastNote, B: null } }),
+      prevSample: () => this.step(-1), nextSample: () => this.step(1),
+      readCols: [col('A', A, liveA), col('B', B, liveB)],
+      zoneTitle: sfSlot ? `ZONE MAP — ${sfSlot === A ? 'A' : 'B'} · ${sf2.presets[sfSlot.preset].name} — CLICK A KEY TO AUDITION` : 'ZONE MAP — NO SF2 IN A/B', zoneCount: sfSlot ? `${zones.length} ZONES${st.kb === 'split' ? ' · SPLIT ' + noteName(st.split) : ''}` : '—',
+      zoneCells, zoneLabels,
+      ed: { badge: cur ? this.typeOf(cur).toUpperCase() : '—', badgeBg: cur ? BADGE[this.typeOf(cur)] : '#c2c2ba', title: cur ? `${cur.key === st.slotA ? 'A ▸ ' : cur.key === st.slotB ? 'B ▸ ' : ''}${this.pathOf(cur)}${st.dirtyWav && cur.src === 'wav' ? ' ●' : ''}` : '— no sample selected —' },
+      status: st.status, statusColor: st.statusKind === 'warn' ? WARN : OK,
+      togglePlay: () => { if (!cur) return; st.playing ? this.setState({ playing: false }) : this.play(cur.key, cur.root); }, playLabel: st.playing ? '■ STOP' : `▸ PLAY ${cur ? noteName(cur.root) : ''}`, playBg: st.playing ? ACC : '#fff', playFg: st.playing ? '#fff' : TXT,
+      lpF: lp('fwd'), lpP: lp('pp'), lpO: lp('off'),
+      toggleSnap: () => this.setState({ snap: !st.snap }), snapMark: st.snap ? '✓' : '',
+      suggest: this.suggest, autoRoot: this.autoRoot, save: this.save, saveAs: this.saveAs, saveTitle: saveT.why, saveOpacity: saveT.ok ? 1 : 0.4,
+      waveRef: this.waveRef, waveDown: this.waveDown, waveMove: this.waveMove, waveUp: this.waveUp, waveWheel: this.waveWheel, noMenu: this.noMenu, wv, seam,
+      fStart: F('start', () => cur ? cur.loopStart : '', n => cur && this.edit(cur.key, { loopStart: clampS(n) })),
+      fEnd: F('end', () => cur ? cur.loopEnd : '', n => cur && this.edit(cur.key, { loopEnd: clampE(n) })),
+      fLen: F('len', () => cur ? cur.loopEnd - cur.loopStart + 1 : '', n => cur && this.edit(cur.key, { loopEnd: clampE(cur.loopStart + n - 1) })),
+      periods, periodsColor, periodsBg,
+      fRoot: F('root', () => cur ? noteName(cur.root) : '', v => { const n = parseNote(v); if (n != null && cur) this.edit(cur.key, { root: n }); }, false),
+      fFine: F('fine', () => cur ? cur.fine : '', n => cur && this.edit(cur.key, { fine: Math.max(-99, Math.min(99, Math.round(n))) })),
+      fAtt: F('att', () => cur ? (cur.attack ?? 0) : '', n => cur && this.edit(cur.key, { attack: Math.max(0, Math.min(500, Math.round(n))) })),
+      fRel: F('rel', () => cur ? (cur.release ?? 80) : '', n => cur && this.edit(cur.key, { release: Math.max(10, Math.min(5000, Math.round(n))) })),
+      click, loudness: loud,
+      fPrefix: F('prefix', () => cur ? (cur.prefix ?? cur.name.replace(/\s+/g, '_').toUpperCase().slice(0, 8)) : '', v => cur && this.edit(cur.key, { prefix: v }), false),
+      fDesc: F('desc', () => cur ? (cur.desc ?? (cur.src === 'sf2' ? `sf2=${sf2.file} preset=${sf2.presets[cur.preset].id} zone="${cur.name}" bits=16 rate=${cur.rate}Hz loop=${cur.loopStart}-${cur.loopEnd} ${cur.kind} att=${cur.attack ?? 0}ms rel=${cur.release ?? 80}ms` : cur.src === 'mod' ? `module=fall_in_love.it (it) sample=${cur.idx} "${cur.name}" bits=${cur.bits} c5=${cur.rate}Hz loop=${cur.loopStart}-${cur.loopEnd} ${cur.kind}` : `wav=ROM_PAD_C3.wav 24-bit 44100Hz stereo loop=${cur.loopStart}-${cur.loopEnd} ${cur.kind}`)) : '', v => cur && this.edit(cur.key, { desc: v }), false),
+      cursorLine,
+      exp: { folder: ex.folder, fmtNote: ex.fmt === 'native' ? (cur ? `writes ${cur.rate} Hz ${cur.bits < 16 ? '8→16' : cur.bits}-bit ${cur.ch === 2 ? 'stereo' : 'mono'}` : 'source rate & depth') : 'resample + TPDF dither → 44100 Hz 16-bit mono', sampleName: cur ? `${cur.src === 'sf2' ? 'Vintage_Dreams' : cur.src === 'mod' ? 'fall_in_love' : 'ROM_PAD_C3'}_${String(cur.idx).padStart(2, '0')}_${cur.name.replace(/\s+/g, '_')}_${noteName(cur.root)}.wav` : '—', rangeNote: rangeLen > 0 ? `${rangeLen} smp${rangeOut ? ' · markers outside range' : ' · markers remapped'}` : 'end must exceed start', rangeColor: rangeLen > 0 && !rangeOut ? TXT3 : WARN },
+      browseFolder: () => this.setStatus('folder chooser (native) · last used remembered', 'ok'),
+      qtRef: quick('reference', 'D:\\samples\\reference\\fall_in_love'), qtRom: quick('rom', 'D:\\rom\\waves\\v3'),
+      fmtNat: exSeg('fmt', 'native'), fmt16: exSeg('fmt', '16'), foldSum: exSeg('fold', 'sum'), foldL: exSeg('fold', 'L'), foldOpacity: cur && cur.ch === 2 || ex.fmt === '16' ? 1 : 0.45,
+      exportSample: () => cur && this.setStatus(`exported ${cur.name} → ${ex.folder} (smpl ${cur.loopStart}–${cur.loopEnd} ${cur.kind === 'pp' ? 'type 1' : 'type 0'}, bext)`, 'ok'),
+      fRs: F('rs', () => ex.rs, n => setExp({ rs: Math.max(0, Math.round(n)) })), fRe: F('re', () => ex.re, n => setExp({ re: Math.max(0, Math.round(n)) })),
+      exportRange: () => rangeLen > 0 ? this.setStatus(`EXPORT RANGE [${ex.rs}, ${ex.re}) → ${rangeLen} samples written${rangeOut ? ' · WARNING markers dropped' : ', markers remapped'}`, rangeOut ? 'warn' : 'ok') : this.setStatus('EXPORT RANGE: end must exceed start', 'warn'),
+      scPreset: { ...exSeg('scope', 'preset'), label: scopeLabel }, scSource: exSeg('scope', 'source'),
+      toggleSkip: () => setExp({ skip: !ex.skip }), skipMark: ex.skip ? '✓' : '',
+      batch: { running: b.running, btnLabel: b.running ? 'CANCEL' : (b.done >= b.total ? 'EXPORT ALL AGAIN' : 'EXPORT ALL'), btnBg: b.running ? '#fff' : ACC, btnFg: b.running ? '#c2453a' : '#fff', pct: Math.round(100 * b.done / b.total), current: b.running ? `writing ${String(b.done + 1).padStart(2, '0')} ${this.sources[1].samples[Math.min(24, b.done)].name}` : (b.done >= b.total ? 'idle · last batch complete' : 'idle'), count: `${b.done} / ${b.total}`, log: b.log },
+      batchStart: () => this.setState(s => ({ batch: s.batch.running ? { ...s.batch, running: false, log: [{ t: `cancelled at ${s.batch.done} / ${s.batch.total}`, c: WARN }, ...s.batch.log].slice(0, 4) } : { running: true, done: 0, total: 25, skipped: ex.skip ? 3 : 0, log: [] } })),
+      meta,
+      gain: st.gain, gainPx: 7 + 186 * st.gain, thumbPx: 186 * st.gain, gainDb, setGain: e => this.setState({ gain: parseFloat(e.target.value) }),
+      voices: st.voices, voiceDot: st.voices > 0 ? OK : '#c2c2ba'
+    };
+  }
+}
+</script>
+</body>
+</html>

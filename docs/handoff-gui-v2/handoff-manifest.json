@@ -1,0 +1,974 @@
+{
+  "schema": "sf2scout-gui-handoff",
+  "version": 2,
+  "date": "2026-09-13",
+  "from": "gui-claude",
+  "canvas": {
+    "width": 1200,
+    "height": 840,
+    "scaleMin": 0.75,
+    "scaleMax": 1.5,
+    "fixedAspect": true
+  },
+  "fonts": {
+    "sans": "IBM Plex Sans (bundle 400/500/600)",
+    "mono": "IBM Plex Mono (bundle 400/500/700)"
+  },
+  "params": [
+    {
+      "id": "master",
+      "type": "float",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.72,
+      "control": "masterSlider"
+    },
+    {
+      "id": "midiChannel",
+      "type": "int",
+      "range": [
+        0,
+        16
+      ],
+      "default": 0,
+      "control": "midiChip"
+    },
+    {
+      "id": "auditionMode",
+      "type": "int",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0,
+      "control": "modeSeg"
+    }
+  ],
+  "rows": {
+    "header": [
+      0,
+      48
+    ],
+    "body": [
+      48,
+      320
+    ],
+    "zoneBand": [
+      368,
+      104
+    ],
+    "editor": [
+      472,
+      324
+    ],
+    "footer": [
+      796,
+      44
+    ]
+  },
+  "columns": {
+    "main": [
+      0,
+      944
+    ],
+    "export": [
+      945,
+      255
+    ],
+    "sourceList": [
+      0,
+      204
+    ],
+    "contents": [
+      204,
+      296
+    ],
+    "readout": [
+      500,
+      444
+    ]
+  },
+  "controls": [
+    {
+      "id": "loadButton",
+      "type": "button",
+      "label": "LOAD",
+      "bounds": {
+        "x": 16,
+        "y": 9,
+        "w": 64,
+        "h": 30
+      },
+      "action": "openSource"
+    },
+    {
+      "id": "sourcesOpen",
+      "type": "label",
+      "label": "SOURCES OPEN",
+      "bounds": {
+        "x": 94,
+        "y": 12,
+        "w": 250,
+        "h": 28
+      }
+    },
+    {
+      "id": "kbSeg",
+      "type": "segmented",
+      "label": "KEYBOARD PLAYS",
+      "bounds": {
+        "x": 637,
+        "y": 8,
+        "w": 232,
+        "h": 32
+      },
+      "items": [
+        "A",
+        "B",
+        "SPLIT",
+        "TOGGLE"
+      ],
+      "cellWidths": [
+        44,
+        44,
+        62,
+        70
+      ],
+      "reads": [
+        "slotA",
+        "slotB"
+      ],
+      "writes": "kbMode"
+    },
+    {
+      "id": "splitField",
+      "type": "noteField",
+      "label": "split note",
+      "bounds": {
+        "x": 883,
+        "y": 12,
+        "w": 48,
+        "h": 24
+      },
+      "writes": "splitNote",
+      "enabledWhen": "kbMode==SPLIT"
+    },
+    {
+      "id": "modeSeg",
+      "type": "segmented",
+      "label": "MODE",
+      "bounds": {
+        "x": 999,
+        "y": 9,
+        "w": 185,
+        "h": 30
+      },
+      "items": [
+        "AS-AUTHORED",
+        "LOOP-ONLY"
+      ],
+      "cellWidths": [
+        95,
+        82
+      ],
+      "param": "auditionMode"
+    },
+    {
+      "id": "sourceList",
+      "type": "tree",
+      "label": "SOURCES",
+      "bounds": {
+        "x": 0,
+        "y": 48,
+        "w": 204,
+        "h": 320
+      },
+      "rowHeight": 32,
+      "headerHeight": 42,
+      "writes": [
+        "selSrc",
+        "selPreset",
+        "cur"
+      ]
+    },
+    {
+      "id": "unloadButton",
+      "type": "button",
+      "label": "UNLOAD",
+      "bounds": {
+        "x": 138,
+        "y": 58,
+        "w": 56,
+        "h": 22
+      },
+      "action": "unloadSource"
+    },
+    {
+      "id": "contentsList",
+      "type": "list",
+      "label": "SAMPLES",
+      "bounds": {
+        "x": 204,
+        "y": 48,
+        "w": 296,
+        "h": 320
+      },
+      "rowHeight": 26,
+      "headerHeight": 42,
+      "columnHeader": 18,
+      "columns": [
+        "#",
+        "NAME",
+        "FMT",
+        "FRAMES",
+        "LP",
+        "HZ"
+      ],
+      "columnWidths": [
+        18,
+        "flex",
+        40,
+        36,
+        22,
+        36
+      ],
+      "writes": "cur",
+      "doubleClick": "playAtRoot"
+    },
+    {
+      "id": "assignA",
+      "type": "button",
+      "label": "→ A",
+      "bounds": {
+        "x": 350,
+        "y": 58,
+        "w": 34,
+        "h": 22
+      },
+      "action": "assignSlotA"
+    },
+    {
+      "id": "assignB",
+      "type": "button",
+      "label": "→ B",
+      "bounds": {
+        "x": 390,
+        "y": 58,
+        "w": 34,
+        "h": 22
+      },
+      "action": "assignSlotB"
+    },
+    {
+      "id": "prevSample",
+      "type": "button",
+      "label": "‹",
+      "bounds": {
+        "x": 430,
+        "y": 58,
+        "w": 22,
+        "h": 22
+      },
+      "action": "stepSample",
+      "arg": -1
+    },
+    {
+      "id": "nextSample",
+      "type": "button",
+      "label": "›",
+      "bounds": {
+        "x": 458,
+        "y": 58,
+        "w": 22,
+        "h": 22
+      },
+      "action": "stepSample",
+      "arg": 1
+    },
+    {
+      "id": "readoutA",
+      "type": "readout",
+      "label": "A",
+      "bounds": {
+        "x": 512,
+        "y": 60,
+        "w": 201,
+        "h": 296
+      },
+      "reads": "slotA"
+    },
+    {
+      "id": "readoutB",
+      "type": "readout",
+      "label": "B",
+      "bounds": {
+        "x": 727,
+        "y": 60,
+        "w": 201,
+        "h": 296
+      },
+      "reads": "slotB"
+    },
+    {
+      "id": "zoneStrip",
+      "type": "zoneMap",
+      "label": "ZONE MAP",
+      "bounds": {
+        "x": 16,
+        "y": 396,
+        "w": 912,
+        "h": 52
+      },
+      "keys": 128,
+      "cellWidth": 7.125,
+      "action": "playKey"
+    },
+    {
+      "id": "zoneLabels",
+      "type": "custom",
+      "label": "zone labels",
+      "bounds": {
+        "x": 16,
+        "y": 452,
+        "w": 912,
+        "h": 20
+      }
+    },
+    {
+      "id": "editorTitle",
+      "type": "label",
+      "label": "EDITOR",
+      "bounds": {
+        "x": 16,
+        "y": 482,
+        "w": 912,
+        "h": 12
+      }
+    },
+    {
+      "id": "playButton",
+      "type": "toggleButton",
+      "label": "PLAY / STOP",
+      "bounds": {
+        "x": 16,
+        "y": 502,
+        "w": 84,
+        "h": 26
+      },
+      "action": "latchPlay"
+    },
+    {
+      "id": "loopSeg",
+      "type": "segmented",
+      "label": "LOOP",
+      "bounds": {
+        "x": 148,
+        "y": 502,
+        "w": 179,
+        "h": 26
+      },
+      "items": [
+        "FWD",
+        "PING-PONG",
+        "OFF"
+      ],
+      "cellWidths": [
+        44,
+        83,
+        44
+      ],
+      "writes": "loopOverride"
+    },
+    {
+      "id": "snapToggle",
+      "type": "checkbox",
+      "label": "ZERO-X SNAP",
+      "bounds": {
+        "x": 341,
+        "y": 502,
+        "w": 110,
+        "h": 26
+      },
+      "writes": "snap"
+    },
+    {
+      "id": "suggestButton",
+      "type": "button",
+      "label": "SUGGEST",
+      "bounds": {
+        "x": 465,
+        "y": 502,
+        "w": 82,
+        "h": 26
+      },
+      "action": "suggestSplice"
+    },
+    {
+      "id": "autoRootButton",
+      "type": "button",
+      "label": "AUTO-DETECT ROOT",
+      "bounds": {
+        "x": 555,
+        "y": 502,
+        "w": 140,
+        "h": 26
+      },
+      "action": "autoDetectRoot"
+    },
+    {
+      "id": "saveAsButton",
+      "type": "button",
+      "label": "SAVE AS",
+      "bounds": {
+        "x": 784,
+        "y": 502,
+        "w": 76,
+        "h": 26
+      },
+      "action": "saveAs"
+    },
+    {
+      "id": "saveButton",
+      "type": "button",
+      "label": "SAVE",
+      "bounds": {
+        "x": 868,
+        "y": 502,
+        "w": 60,
+        "h": 26
+      },
+      "action": "save",
+      "enabledWhen": "cur.src==wav"
+    },
+    {
+      "id": "waveform",
+      "type": "waveEditor",
+      "label": "waveform",
+      "bounds": {
+        "x": 16,
+        "y": 534,
+        "w": 912,
+        "h": 140
+      },
+      "writes": [
+        "loopStart",
+        "loopEnd",
+        "view"
+      ]
+    },
+    {
+      "id": "seamView",
+      "type": "custom",
+      "label": "SEAM VIEW",
+      "bounds": {
+        "x": 16,
+        "y": 682,
+        "w": 300,
+        "h": 80
+      }
+    },
+    {
+      "id": "loopStartField",
+      "type": "intField",
+      "label": "LOOP START",
+      "bounds": {
+        "x": 328,
+        "y": 695,
+        "w": 84,
+        "h": 22
+      },
+      "writes": "loopStart"
+    },
+    {
+      "id": "loopEndField",
+      "type": "intField",
+      "label": "LOOP END (INCL)",
+      "bounds": {
+        "x": 420,
+        "y": 695,
+        "w": 84,
+        "h": 22
+      },
+      "writes": "loopEnd"
+    },
+    {
+      "id": "loopLenField",
+      "type": "intField",
+      "label": "LOOP LEN",
+      "bounds": {
+        "x": 512,
+        "y": 695,
+        "w": 84,
+        "h": 22
+      },
+      "writes": "loopEnd"
+    },
+    {
+      "id": "periodsReadout",
+      "type": "readonlyField",
+      "label": "PERIODS",
+      "bounds": {
+        "x": 604,
+        "y": 695,
+        "w": 68,
+        "h": 22
+      },
+      "reads": "periods",
+      "warnWhen": "nonInteger"
+    },
+    {
+      "id": "rootField",
+      "type": "noteField",
+      "label": "ROOT",
+      "bounds": {
+        "x": 680,
+        "y": 695,
+        "w": 52,
+        "h": 22
+      },
+      "writes": "root"
+    },
+    {
+      "id": "fineField",
+      "type": "intField",
+      "label": "FINE c",
+      "bounds": {
+        "x": 740,
+        "y": 695,
+        "w": 52,
+        "h": 22
+      },
+      "writes": "fine",
+      "range": [
+        -99,
+        99
+      ]
+    },
+    {
+      "id": "attackField",
+      "type": "intField",
+      "label": "ATTACK ms",
+      "bounds": {
+        "x": 800,
+        "y": 695,
+        "w": 56,
+        "h": 22
+      },
+      "writes": "attack",
+      "range": [
+        0,
+        500
+      ]
+    },
+    {
+      "id": "releaseField",
+      "type": "intField",
+      "label": "RELEASE ms",
+      "bounds": {
+        "x": 864,
+        "y": 695,
+        "w": 56,
+        "h": 22
+      },
+      "writes": "release",
+      "range": [
+        10,
+        5000
+      ]
+    },
+    {
+      "id": "clickMeter",
+      "type": "meter",
+      "label": "CLICK METER",
+      "bounds": {
+        "x": 328,
+        "y": 735,
+        "w": 110,
+        "h": 22
+      },
+      "reads": "clickRatio",
+      "thresholds": [
+        1,
+        2
+      ]
+    },
+    {
+      "id": "loudnessReadout",
+      "type": "readonlyField",
+      "label": "LOUDNESS",
+      "bounds": {
+        "x": 446,
+        "y": 735,
+        "w": 84,
+        "h": 22
+      },
+      "reads": "loopRmsDb"
+    },
+    {
+      "id": "prefixField",
+      "type": "textField",
+      "label": "SAVE AS PREFIX",
+      "bounds": {
+        "x": 538,
+        "y": 735,
+        "w": 110,
+        "h": 22
+      },
+      "writes": "prefix"
+    },
+    {
+      "id": "descField",
+      "type": "textField",
+      "label": "BEXT DESCRIPTION",
+      "bounds": {
+        "x": 656,
+        "y": 735,
+        "w": 272,
+        "h": 22
+      },
+      "writes": "desc"
+    },
+    {
+      "id": "statusLine",
+      "type": "label",
+      "label": "status",
+      "bounds": {
+        "x": 16,
+        "y": 770,
+        "w": 912,
+        "h": 14
+      }
+    },
+    {
+      "id": "exportFolder",
+      "type": "pathField",
+      "label": "FOLDER",
+      "bounds": {
+        "x": 957,
+        "y": 96,
+        "w": 201,
+        "h": 24
+      },
+      "reads": "exportFolder"
+    },
+    {
+      "id": "browseFolder",
+      "type": "button",
+      "label": "…",
+      "bounds": {
+        "x": 1162,
+        "y": 96,
+        "w": 26,
+        "h": 24
+      },
+      "action": "chooseFolder"
+    },
+    {
+      "id": "quickReference",
+      "type": "toggleButton",
+      "label": "reference",
+      "bounds": {
+        "x": 957,
+        "y": 124,
+        "w": 113,
+        "h": 20
+      },
+      "action": "setQuickTarget",
+      "arg": "reference"
+    },
+    {
+      "id": "quickRom",
+      "type": "toggleButton",
+      "label": "rom",
+      "bounds": {
+        "x": 1075,
+        "y": 124,
+        "w": 113,
+        "h": 20
+      },
+      "action": "setQuickTarget",
+      "arg": "rom"
+    },
+    {
+      "id": "audioSeg",
+      "type": "segmented",
+      "label": "AUDIO",
+      "bounds": {
+        "x": 1019,
+        "y": 154,
+        "w": 169,
+        "h": 22
+      },
+      "items": [
+        "NATIVE",
+        "16b/44.1 MONO"
+      ],
+      "writes": "exportFormat"
+    },
+    {
+      "id": "stereoSeg",
+      "type": "segmented",
+      "label": "STEREO",
+      "bounds": {
+        "x": 1019,
+        "y": 182,
+        "w": 169,
+        "h": 22
+      },
+      "items": [
+        "SUM",
+        "L ONLY"
+      ],
+      "writes": "stereoFold"
+    },
+    {
+      "id": "exportSampleButton",
+      "type": "button",
+      "label": "EXPORT SAMPLE",
+      "bounds": {
+        "x": 957,
+        "y": 243,
+        "w": 231,
+        "h": 28
+      },
+      "action": "exportSample"
+    },
+    {
+      "id": "rangeStartField",
+      "type": "intField",
+      "label": "RANGE START",
+      "bounds": {
+        "x": 957,
+        "y": 312,
+        "w": 112,
+        "h": 22
+      },
+      "writes": "rangeStart"
+    },
+    {
+      "id": "rangeEndField",
+      "type": "intField",
+      "label": "END (EXCL)",
+      "bounds": {
+        "x": 1076,
+        "y": 312,
+        "w": 112,
+        "h": 22
+      },
+      "writes": "rangeEnd"
+    },
+    {
+      "id": "exportRangeButton",
+      "type": "button",
+      "label": "EXPORT RANGE",
+      "bounds": {
+        "x": 957,
+        "y": 340,
+        "w": 104,
+        "h": 24
+      },
+      "action": "exportRange"
+    },
+    {
+      "id": "batchScopeSeg",
+      "type": "segmented",
+      "label": "BATCH",
+      "bounds": {
+        "x": 1019,
+        "y": 385,
+        "w": 169,
+        "h": 22
+      },
+      "items": [
+        "MODULE|PRESET|FILE",
+        "SOURCE"
+      ],
+      "writes": "batchScope"
+    },
+    {
+      "id": "skipExisting",
+      "type": "checkbox",
+      "label": "skip existing files",
+      "bounds": {
+        "x": 1019,
+        "y": 413,
+        "w": 169,
+        "h": 15
+      },
+      "writes": "skipExisting"
+    },
+    {
+      "id": "batchButton",
+      "type": "button",
+      "label": "EXPORT ALL / CANCEL",
+      "bounds": {
+        "x": 957,
+        "y": 434,
+        "w": 231,
+        "h": 28
+      },
+      "action": "batchToggle"
+    },
+    {
+      "id": "batchProgress",
+      "type": "progressBar",
+      "label": "progress",
+      "bounds": {
+        "x": 957,
+        "y": 472,
+        "w": 231,
+        "h": 12
+      },
+      "reads": "batch.done/total"
+    },
+    {
+      "id": "batchLog",
+      "type": "label",
+      "label": "last files",
+      "bounds": {
+        "x": 957,
+        "y": 512,
+        "w": 231,
+        "h": 52
+      }
+    },
+    {
+      "id": "metadataBox",
+      "type": "textBox",
+      "label": "METADATA",
+      "bounds": {
+        "x": 957,
+        "y": 634,
+        "w": 231,
+        "h": 150
+      },
+      "reads": "cur.source.metadata"
+    },
+    {
+      "id": "masterSlider",
+      "type": "slider",
+      "label": "MASTER",
+      "bounds": {
+        "x": 80,
+        "y": 808,
+        "w": 200,
+        "h": 20
+      },
+      "param": "master"
+    },
+    {
+      "id": "masterDb",
+      "type": "label",
+      "label": "dB",
+      "bounds": {
+        "x": 292,
+        "y": 796,
+        "w": 56,
+        "h": 44
+      }
+    },
+    {
+      "id": "buildStamp",
+      "type": "label",
+      "label": "build",
+      "bounds": {
+        "x": 360,
+        "y": 796,
+        "w": 120,
+        "h": 44
+      }
+    },
+    {
+      "id": "deviceChip",
+      "type": "comboBox",
+      "label": "DEVICE",
+      "bounds": {
+        "x": 806,
+        "y": 804,
+        "w": 150,
+        "h": 28
+      },
+      "standaloneOnly": true,
+      "writes": "midiDevice"
+    },
+    {
+      "id": "midiChip",
+      "type": "comboBox",
+      "label": "MIDI IN",
+      "bounds": {
+        "x": 992,
+        "y": 804,
+        "w": 76,
+        "h": 28
+      },
+      "param": "midiChannel",
+      "items": [
+        "OMNI",
+        "CH 1..16"
+      ]
+    },
+    {
+      "id": "voices",
+      "type": "label",
+      "label": "voices",
+      "bounds": {
+        "x": 1080,
+        "y": 796,
+        "w": 104,
+        "h": 44
+      },
+      "reads": "activeVoices"
+    }
+  ],
+  "actions": [
+    "openSource",
+    "unloadSource",
+    "assignSlotA",
+    "assignSlotB",
+    "stepSample",
+    "playKey",
+    "playAtRoot",
+    "latchPlay",
+    "setLoopMode",
+    "nudgeStart",
+    "nudgeEnd",
+    "suggestSplice",
+    "autoDetectRoot",
+    "save",
+    "saveAs",
+    "chooseFolder",
+    "setQuickTarget",
+    "exportSample",
+    "exportRange",
+    "batchToggle",
+    "swapAB",
+    "toggleAuditionMode"
+  ],
+  "hotkeys": {
+    "F": "setLoopMode fwd",
+    "P": "setLoopMode pp",
+    "O": "setLoopMode off",
+    "[": "nudgeStart -1",
+    "]": "nudgeStart +1",
+    "{": "nudgeStart -100",
+    "}": "nudgeStart +100",
+    ";": "nudgeEnd -1",
+    "'": "nudgeEnd +1",
+    ":": "nudgeEnd -100",
+    "\"": "nudgeEnd +100",
+    ",": "stepSample -1",
+    ".": "stepSample +1",
+    "Tab": "swapAB",
+    "Space": "latchPlay",
+    "L": "toggleAuditionMode",
+    "Ctrl+S": "save",
+    "Ctrl+Shift+S": "saveAs"
+  },
+  "gaps": [
+    "Header right-group x values are resolved from right-alignment at x 1184 with 14 px gaps; measure the prototype if Plex metrics shift them by ±2 px.",
+    "Export column y values below the folder block are stacked with 10 px gaps; the metadata box is bottom-anchored (ends y 788).",
+    "contract/MANIFEST-FORMAT.md was not in the received bundle — field names follow the derived v1 manifest."
+  ]
+}

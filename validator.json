@@ -5,8 +5,8 @@
   "srcExport": "C:\\vagrant\\Projects\\sf2-scout\\sf2-scout-src",
 
   "handoff": {
-    "manifest": "docs\\handoff-gui-v1\\handoff-manifest.json",
-    "root": "docs\\handoff-gui-v1",
+    "manifest": "docs\\handoff-gui-v2\\handoff-manifest.json",
+    "root": "docs\\handoff-gui-v2",
     "spec": { "file": "docs\\PARAMS.md", "block": "sf2scout-params" },
     "guiPage": "main"
   },
