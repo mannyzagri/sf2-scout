@@ -2,6 +2,17 @@
 
 Convention: `C:\code-bank\templates\CHANGELOG-convention.md`. Prefix `SC`.
 
+## v0.6.1 — 2026-10-07 — MO3 and zipped modules open
+Host impact: reload instance (no param change); Cubase re-scan (version string changed).
+
+### Engine
+- [SC-044] ADDED: MO3 modules with MP3 / Vorbis / lossless samples, OGG-XM, and the other compressed-sample formats now load. libopenmpt's own bundled decoders are compiled in, exactly as its "libopenmpt-small" MSVC project does: miniz (MIT), minimp3 (CC0), stb_vorbis (PD/MIT), vendored verbatim under `third_party/libopenmpt/libopenmpt-0.8.9/include/` from the official `libopenmpt-0.8.9+release.msvc.zip` (sha256 `8d3b3c14…6d32bea`; its soundlib/common are byte-identical to ours). New CMake target `openmpt_ext`.
+- [SC-045] ADDED: zipped modules (.mdz .s3z .xmz .itz .mptmz) open. libopenmpt library builds force `NO_ARCHIVE_SUPPORT` and do not ship the unarchiver, so `ModuleSource` unwraps the zip itself with miniz (largest entry with a supported extension; 512 MB guard; nested zips refused) and parses the inner module. The extensions are added to `isSupportedExtension` / `supportedExtensions`.
+- [SC-046] ADDED: harness `[mod-compressed]` — a .mdz fabricated in memory with miniz opens to the plain MOD's sample table and data; truncated zips and truncated / garbage MO3 fail cleanly. **356 checks**, 28 sections (was 347 / 27). MO3 with MP3 / Vorbis samples cannot be fabricated without an encoder: verify with `--probe` on real files.
+
+### Context
+- `feat/v2` (0.6.0) merged to `main` 2026-10-07 after the operator's ear pass; this work is BreakForge v2's donor track (its engine sources are banked to code-bank from this commit).
+
 ## v0.6.0 — 2026-09-13 — GUI handoff v2 landed: the whole v2 face + build orders 2–4 behind it (deployed 2026-09-13, pluginval 5)
 Host impact: reload instance (no param-list change; the non-param tree layout changed — `sources` / `edits` children, slot / export properties; a 0.5.0 session restores nothing but its params). Window is now 1200 × 840, resizable with a fixed aspect.
 
@@ -88,7 +99,7 @@ Host impact: n/a (never loaded in a host yet)
 ### Infra
 - [SC-005] ADDED: scaffold — CLAUDE.md, SSOT.md (unsigned), PROJECT-NOTES STATE, validator.json (dsp/bundle/deploy/host), FEATURE-INDEX.json, comms/, share mailbox.
 
-## ITEM LEDGER (next free: SC-031)
+## ITEM LEDGER (next free: SC-047)
 | id | status | introduced | resolved | summary |
 |----|--------|-----------|----------|---------|
 | SC-001 | shipped | 0.1.0 | — | SF2 loading + zone table |

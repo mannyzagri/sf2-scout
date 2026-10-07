@@ -13,6 +13,8 @@
 #include "mpt/base/span.hpp"
 #include "mpt/io_read/filecursor_memory.hpp"
 
+#include <miniz/miniz.h>   // libopenmpt include/ (openmpt_ext): zipped-module unwrap
+
 #include <algorithm>
 #include <cstring>
 
@@ -64,10 +66,75 @@ std::string lowerNoDot (std::string ext)
 }
 } // namespace
 
+namespace
+{
+
+// Zipped modules (.mdz .s3z .xmz .itz .mptmz). libopenmpt's library builds
+// force NO_ARCHIVE_SUPPORT (common/BuildSettings.h) and do not ship the
+// unarchiver, so the zip is unwrapped here with the bundled miniz: the largest
+// entry whose extension the soundlib supports is extracted and parsed.
+constexpr const char* kZipExtensions[] = { "mdz", "s3z", "xmz", "itz", "mptmz" };
+constexpr size_t kMaxUnzippedBytes = (size_t) 512 * 1024 * 1024;   // zip-bomb guard
+
+bool isZip (const void* data, size_t size)
+{
+    const auto* b = (const unsigned char*) data;
+    return size >= 4 && b[0] == 'P' && b[1] == 'K' && b[2] == 3 && b[3] == 4;
+}
+
+bool unzipBestModule (const void* data, size_t size, std::vector<unsigned char>& out, std::string& error)
+{
+    mz_zip_archive zip;
+    std::memset (&zip, 0, sizeof (zip));
+    if (! mz_zip_reader_init_mem (&zip, data, size, 0)) { error = "damaged zip archive"; return false; }
+    int best = -1;
+    mz_uint64 bestSize = 0;
+    const mz_uint n = mz_zip_reader_get_num_files (&zip);
+    for (mz_uint i = 0; i < n; ++i)
+    {
+        mz_zip_archive_file_stat st;
+        if (! mz_zip_reader_file_stat (&zip, i, &st) || st.m_is_directory) continue;
+        std::string name (st.m_filename);
+        const auto dot = name.find_last_of ('.');
+        if (dot == std::string::npos) continue;
+        bool ok = false;
+        try { ok = OpenMPT::CSoundFile::IsExtensionSupported (lowerNoDot (name.substr (dot))); } catch (...) {}
+        if (ok && st.m_uncomp_size > bestSize && st.m_uncomp_size <= kMaxUnzippedBytes)
+        {
+            best = (int) i;
+            bestSize = st.m_uncomp_size;
+        }
+    }
+    bool ok = false;
+    if (best < 0) error = "zip archive holds no tracker module";
+    else
+    {
+        size_t len = 0;
+        if (void* p = mz_zip_reader_extract_to_heap (&zip, (mz_uint) best, &len, 0))
+        {
+            out.assign ((const unsigned char*) p, (const unsigned char*) p + len);
+            mz_free (p);
+            ok = ! out.empty();
+        }
+        if (! ok) error = "zip entry could not be extracted";
+    }
+    mz_zip_reader_end (&zip);
+    return ok;
+}
+} // namespace
+
 std::unique_ptr<ModuleSource> ModuleSource::load (const void* data, size_t size, const std::string& fileName, std::string& error)
 {
     error.clear();
     if (data == nullptr || size < 4) { error = "not a module (too short)"; return nullptr; }
+
+    if (isZip (data, size))
+    {
+        std::vector<unsigned char> inner;
+        if (! unzipBestModule (data, size, inner, error)) return nullptr;
+        if (isZip (inner.data(), inner.size())) { error = "nested zip archives are not opened"; return nullptr; }
+        return load (inner.data(), inner.size(), fileName, error);
+    }
 
     std::unique_ptr<ModuleSource> out (new ModuleSource());
     out->fileName_ = fileName;
@@ -142,6 +209,7 @@ bool ModuleSource::isSupportedExtension (const std::string& ext)
 {
     const std::string e = lowerNoDot (ext);
     if (e.empty()) return false;
+    for (const char* z : kZipExtensions) if (e == z) return true;
     try { return OpenMPT::CSoundFile::IsExtensionSupported (e); }
     catch (...) { return false; }
 }
@@ -155,6 +223,7 @@ std::vector<std::string> ModuleSource::supportedExtensions()
             if (e != nullptr) out.emplace_back (e);
     }
     catch (...) {}
+    for (const char* z : kZipExtensions) out.emplace_back (z);
     return out;
 }
 

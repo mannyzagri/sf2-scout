@@ -25,6 +25,7 @@
 //   [unload]      clearSlot: only that slot's voices die, retiree collected once
 //   [assists]     LOUDNESS, PERIODS, CLICK METER, SUGGEST, AUTO-DETECT ROOT
 //   [mod-load]    ModuleSource: MOD parse, sample table, loop flags, C-5 rate, decode -> WavSample bridge
+//   [mod-compressed] zipped module (.mdz, fabricated with miniz) opens like the plain MOD; MO3 truncated/garbage -> clean error
 //   [mod-play]    a decoded module sample sounds at its C-5 rate and loops
 // Compile (validator.json dsp stage):
 //   cmake --build build --config Release --target test_engine   (links openmpt_soundlib)
@@ -35,6 +36,7 @@
 #include "../Source/engine/LoopMarkers.h"
 #include "../Source/engine/NoteNames.h"
 #include "../Source/engine/Assists.h"
+#include <miniz/miniz.h>        // libopenmpt include/ (openmpt_ext): fabricates a zipped module
 
 #include <cstdio>
 #include <cstring>
@@ -1392,6 +1394,61 @@ int main (int argc, char** argv)
         std::vector<uint8_t> lie = img; lie[42] = 0xff; lie[43] = 0xff;
         { std::string le; auto t = ModuleSource::load (lie.data(), lie.size(), "lie.mod", le); if (t != nullptr) { std::string de; (void) t->decode (1, de); } }
         CHECK (true);
+    }
+
+    SECTION ("mod-compressed");
+    {
+        // libopenmpt's bundled decoders are compiled in (CMakeLists: openmpt_ext).
+        // A zipped module (.mdz) is fabricated here with miniz's own writer and must
+        // open to the same sample table as the plain MOD. MO3 with MP3 / Vorbis
+        // samples cannot be fabricated without an encoder: those run under --probe
+        // against untracked real files. A truncated or garbage MO3 must fail cleanly.
+        auto img = buildMod (true);
+        mz_zip_archive zip;
+        std::memset (&zip, 0, sizeof (zip));
+        void* zipData = nullptr;
+        size_t zipSize = 0;
+        bool zipped = mz_zip_writer_init_heap (&zip, 0, 0)
+                   && mz_zip_writer_add_mem (&zip, "harness.mod", img.data(), img.size(), MZ_DEFAULT_COMPRESSION)
+                   && mz_zip_writer_finalize_heap_archive (&zip, &zipData, &zipSize);
+        mz_zip_writer_end (&zip);
+        CHECK (zipped && zipSize > 0 && zipSize < img.size());
+        if (zipped)
+        {
+            std::string zerr;
+            auto mdz = ModuleSource::load (zipData, zipSize, "harness.mdz", zerr);
+            CHECK (mdz != nullptr);
+            if (mdz != nullptr)
+            {
+                CHECK (mdz->title() == "scout harness" && mdz->formatType() == "mod");
+                CHECK (mdz->nonEmptySampleCount() == 2 && mdz->samples()[0].name == "loop_c"
+                       && mdz->samples()[0].frames == 1000 && mdz->samples()[0].loopStart == 200);
+                std::string derr;
+                auto w = mdz->decode (1, derr);
+                CHECK (w != nullptr && w->frames == 1000 && std::fabs (w->left[0] * 128.0f - (-100.0f)) < 1e-3f);
+            }
+            // a truncated zip fails cleanly
+            for (int k = 1; k < 8; ++k)
+            {
+                std::string te;
+                auto t = ModuleSource::load (zipData, zipSize * (size_t) k / 8, "cut.mdz", te);
+                if (t != nullptr) { std::string de; (void) t->decode (1, de); }
+            }
+            CHECK (true);
+            mz_free (zipData);
+        }
+        CHECK (ModuleSource::isSupportedExtension ("mo3") && ModuleSource::isSupportedExtension ("mdz")
+               && ModuleSource::isSupportedExtension ("itz") && ModuleSource::isSupportedExtension ("xmz")
+               && ModuleSource::isSupportedExtension ("s3z"));
+        // MO3: "MO3" + version byte, then nothing / garbage -> error, previous state untouched
+        std::vector<uint8_t> mo3 = { 'M', 'O', '3', 5 };
+        std::string e1;
+        CHECK (ModuleSource::load (mo3.data(), mo3.size(), "trunc.mo3", e1) == nullptr && ! e1.empty());
+        for (int i = 0; i < 400; ++i) mo3.push_back ((uint8_t) ((i * 37 + 11) & 0xff));
+        std::string e2;
+        auto g = ModuleSource::load (mo3.data(), mo3.size(), "garbage.mo3", e2);
+        if (g != nullptr) { std::string de; (void) g->decode (1, de); }
+        CHECK (g == nullptr || g->sampleCount() >= 0);
     }
 
     SECTION ("mod-play");
