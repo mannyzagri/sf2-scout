@@ -1,5 +1,9 @@
 # SF2_AUDITIONER_SPEC.md — "SF2 Scout" reference auditioner (VM Claude task)
 
+> **SUPERSEDED 2026-09-12 by `docs/SCOUT_v2_SPEC.md`** (kept verbatim). The
+> "no export / no save" NON-features below no longer apply; SF2 files remain
+> read-only. Still canon for SF2-side detail v2 does not restate.
+
 ## Purpose (read this first — it scopes everything down)
 
 A small, standalone VST3 (+ standalone app target if trivial) whose ONLY job

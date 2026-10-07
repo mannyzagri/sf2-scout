@@ -20,3 +20,8 @@ scratch/
 
 # build agent log
 build_output.log
+# v2: tracker modules and SF2s are the operator's material, never committed
+*.mod
+*.xm
+*.it
+*.s3m

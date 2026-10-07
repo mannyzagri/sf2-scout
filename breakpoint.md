@@ -1,32 +1,49 @@
-# breakpoint — sf2-scout (overwrite-only; subordinate to PROJECT-NOTES.md STATE)
+# breakpoint — session-end snapshot (subordinate to PROJECT-NOTES.md STATE)
 
-**Session end: 2026-08-30, vm-claude — kickoff.**
+Written 2026-09-13 by vm-claude at the end of the GUI handoff v2 pass.
 
 ## Where things stand
 
-- Phase 0–4 code complete: scaffold, SSOT SIGNED, architect review applied
-  (3 blockers + 4 should-fix + nits), harness 112/112, plain-JUCE face wired.
-- **v0.1.0 DEPLOYED** to `\VBOXSVRagrant\Builds\SF2 Scout.vst3` (+ `SF2 Scout.exe`)
-  via release.ps1; pluginval 5 PASS. **Nothing heard yet** — ear pass is the gate.
-- OPEN QUESTIONS 5–7 (window height, Plex fonts, keep Standalone) still open.
+- **0.6.0 is built, validated and deployed** (VST3 to `C:\sf2-scout\SF2 Scout.vst3`
+  and `\\VBOXSVR\vagrant\Builds\SF2 Scout.vst3`, `SF2 Scout.exe` copied to the
+  share `Builds\`). pluginval strictness 5 SUCCESS, harness 347 / 0. Branch
+  `feat/v2`; nothing merged to `main` (still 0.1.0). Commit hash: `git log -1`.
+- The whole v2 face from `docs/handoff-gui-v2/` is in, plus the engine /
+  processor work it needed (three-slot decoded-sample engine, sources model,
+  assists, export range / batch / conversion, metadata, session state).
+  CHANGELOG SC-031..SC-043.
+- The operator has NOT seen it. First look + ear pass (EAR-GATE 13–20 and the
+  older 1–12) is the gate; expect a defect list.
+
+## Assumptions the pass was built on (reversible, OPEN QUESTIONS 11–14)
+
+scalable window (handoff) vs "fixed" (kickoff); 16 voices (spec) vs 32 (v1);
+stereo sources export mono (SUM / L ONLY); manifest param-id renames ignored
+(contract ids kept). Also D-7..D-10 in CLAUDE.md §6.
 
 ## Fresh-session entry ramp
 
-1. `git pull` (mac lane not open; still the rule).
-2. Read CLAUDE.md §0–§2, PROJECT-NOTES STATE, this file, `comms/to-vm.md`.
-3. Fold the ear verdict: a click at the loop seam → D-5 crossfade via
-   /dsp-pass (harness `[authored]` pins the seam); readout wrong at a zone
-   edge → check `[sample-id]` first.
-4. Any change: harness → `release.ps1 -DryRun` → `release.ps1` → `ship.ps1`.
+1. Read CLAUDE.md, then STATE, then this file, then `comms/to-vm.md` and the
+   mailbox `from-gui/` (a manifest re-emit or a defect list may be waiting).
+2. `cmake --build build --config Release --target test_engine && build\Release\test_engine.exe`
+   → 347 checks. `validate.ps1 -Project C:\sf2-scout` → 8 PASS.
+3. To SEE the face on this VM: launch the standalone; loaded states are
+   reached by injecting a session into `%APPDATA%\SF2 Scout\SF2 Scout.settings`
+   and driving buttons through UI Automation (memory note `vm-gui-automation`;
+   scripts were in the 2026-09-13 session scratchpad `shot/inject.ps1`).
+   Mouse / keyboard injection does not work in this RDP session.
+4. Test material (untracked): `scratch/modules/*.it .mod .xm`, exported WAVs in
+   `scratch/modules/out/` and `scratch/export-test/`. No SF2 on the VM — the
+   operator's SoundFonts are on the host.
 
-## Git
+## Known soft spots to keep an eye on
 
-- `main` @ e434399 "Initial commit: SF2 Scout kickoff (phase 0)" — pushed to `mannyzagri/sf2-scout` 2026-08-30.
-
-## Artefacts of this session
-
-- `build\Sf2Scout_artefacts\Release\VST3\SF2 Scout.vst3`
-- `build\Sf2Scout_artefacts\Release\Standalone\SF2 Scout.exe`
-- `scratch\test_engine.exe` (disposable)
-- Mailbox opened: `C:\vagrant\mailbox\sf2-scout\README.md` + first note to
-  gui-claude (`to-gui\VM-KICKOFF-MANIFEST-ASK-20260830.md`).
+- `ScoutProcessor::installSlot`: a shared sample is kept alive in
+  `engineHeld_` until every slot retired it; `~ScoutProcessor` calls
+  `engine_.forgetAll()` before the maps die. Do not reintroduce `delete` on
+  a pointer that came from `decoded_`.
+- The readout / editor rebuild is generation-driven (`sourceGeneration()`);
+  assists (click ratio, loudness) recompute at most every 120 ms.
+- `handoff-lint` still reports 2 mismatches until gui-claude re-emits the
+  manifest in the lint's shape (`controls` = the 3 params, `widgets` = the
+  rest, contract ids). Record the operator's rulings as `rulings` entries then.

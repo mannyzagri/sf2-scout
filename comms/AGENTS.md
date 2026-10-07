@@ -22,5 +22,7 @@ scaffold change.
 - The GUI is **plain JUCE, fixed size** (CLAUDE.md §0, D-1). The §4.0 role
   boundary still applies: the handoff README is the design; numbers it gives
   are copied, gaps are questions to gui-claude, never local inventions.
-- **NON-features are absolute** (docs/DSP.md): no export, no extraction, no
-  save. Do not ask vm-claude to add them; ask the operator.
+- **v2 (2026-09-12, docs/SCOUT_v2_SPEC.md): export of any sample as a
+  loop-tagged WAV IS a feature.** What stays absolute: SF2 and module files are
+  read-only containers, never written. Anything beyond that is a question to
+  the operator, not a request to vm-claude.

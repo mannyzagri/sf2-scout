@@ -5,6 +5,7 @@
 #include "../../third_party/tsf/tsf.h"
 
 #include <cstring>
+#include <cmath>
 #include <algorithm>
 
 namespace sf2scout
@@ -70,6 +71,46 @@ namespace
             pos = cend + (csize & 1);
         }
         return false;
+    }
+
+    // LIST/INFO sub-chunks (INAM, IENG, ICOP, ICMT, ISFT, isng, IPRD, ICRD, ifil,
+    // iver...) as (id, text) pairs in file order. Bounds-checked; never fails --
+    // a SoundFont without an INFO list simply reports none.
+    void readInfo (const uint8_t* data, size_t size, std::vector<std::pair<std::string, std::string>>& out)
+    {
+        if (size < 12 || ! fourcc (data, "RIFF") || ! fourcc (data + 8, "sfbk")) return;
+        const size_t riffEnd = std::min (size, (size_t) 8 + rd32 (data + 4));
+        size_t pos = 12;
+        while (pos + 8 <= riffEnd)
+        {
+            const uint32_t csize = rd32 (data + pos + 4);
+            const size_t cbody = pos + 8, cend = cbody + csize;
+            if (cend > riffEnd) return;
+            if (fourcc (data + pos, "LIST") && csize >= 4 && fourcc (data + cbody, "INFO"))
+            {
+                size_t p = cbody + 4;
+                while (p + 8 <= cend)
+                {
+                    const uint32_t s = rd32 (data + p + 4);
+                    const size_t b = p + 8;
+                    if (b + s > cend) return;
+                    const std::string id ((const char*) data + p, 4);
+                    std::string text;
+                    if ((id == "ifil" || id == "iver") && s >= 4)
+                        text = std::to_string (rd16 (data + b)) + "." + std::to_string (rd16 (data + b + 2));
+                    else
+                    {
+                        size_t n = 0; while (n < s && data[b + n] != 0) ++n;
+                        text.assign ((const char*) data + b, n);
+                        while (! text.empty() && (text.back() == ' ' || text.back() == '\r' || text.back() == '\n')) text.pop_back();
+                    }
+                    if (! text.empty()) out.emplace_back (id, text);
+                    p = b + s + (s & 1);
+                }
+                return;
+            }
+            pos = cend + (csize & 1);
+        }
     }
 
     // F1: SF2 generator values are attacker-controlled (a hostile/fuzzed file);
@@ -138,6 +179,7 @@ std::unique_ptr<SoundFontBank> SoundFontBank::load (const void* data, size_t siz
     std::unique_ptr<SoundFontBank> bank (new SoundFontBank());
     bank->font_ = f;
     bank->samples_ = f->fontSamples;
+    readInfo ((const uint8_t*) data, size, bank->info_);
 
     // F7: sampleCount_ must be a real pool bound. shdr.end is file-supplied and
     // can lie (point past the actual smpl chunk); TSF's region.end cannot -- it
@@ -262,6 +304,49 @@ const Zone* SoundFontBank::zoneForKey (int presetIndex, int key, int vel) const
         if (z.coversKey (key) && (vel < 0 || z.coversVel (vel)))
             return &z;
     return nullptr;
+}
+
+} // namespace sf2scout
+
+namespace sf2scout
+{
+
+std::string SoundFontBank::infoValue (const char* key) const
+{
+    for (const auto& kv : info_) if (kv.first == key) return kv.second;
+    return {};
+}
+
+std::unique_ptr<WavSample> SoundFontBank::decodeZone (const Zone& z) const
+{
+    const uint32_t start = std::min (z.sampleStart, sampleCount_);
+    const uint32_t end   = std::min (std::max (z.sampleEnd, start), sampleCount_);
+    const uint32_t n     = end - start;
+    std::vector<int16_t> pcm (n);
+    for (uint32_t i = 0; i < n; ++i)
+    {
+        const float v = std::max (-1.0f, std::min (1.0f, samples_[start + i]));
+        pcm[i] = (int16_t) std::lround (v * 32767.0f);
+    }
+    std::string name = z.sampleName.empty() ? ("sample" + std::to_string (z.sampleIndex)) : z.sampleName;
+    auto w = WavSample::fromPcm16 (std::move (pcm), 1, z.sampleRate, name + ".wav");
+    if (z.hasLoop() && z.loopStart >= start && z.loopEnd <= end)
+    {
+        w->hasSmpl   = true;
+        w->loopStart = z.loopStart - start;
+        w->loopEnd   = z.loopEnd - start - 1;           // SF2 exclusive -> inclusive
+        w->loopType  = 0;
+    }
+    // the WAV plays note n at 2^((n-root)/12 + cents/1200); SF2 adds coarseTune on top of the root
+    w->rootKey   = std::max (0, std::min (127, z.rootKey - z.transpose));
+    w->fineCents = z.tuneCents;
+    w->rootFromFile = true;
+    w->bextDescription = "sf2=" + fileName_ + " sample=" + std::to_string (z.sampleIndex) + " \"" + name + "\""
+                       + " keys=" + std::to_string (z.lokey) + "-" + std::to_string (z.hikey)
+                       + " root=" + std::to_string (z.rootKey) + " rate=" + std::to_string (z.sampleRate)
+                       + (z.hasLoop() ? " loop=" + std::to_string (z.loopStartRel()) + "-" + std::to_string (z.loopEndRel()) + (z.loopMode == LoopMode::Sustain ? " sustain" : " fwd") : std::string (" loop=none"))
+                       + (z.isStereoHalf() ? (z.sampleType == 4 ? " stereo=L" : " stereo=R") : std::string());
+    return w;
 }
 
 } // namespace sf2scout
