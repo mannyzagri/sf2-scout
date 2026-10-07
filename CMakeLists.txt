@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # SF2 Scout -- vintage sample player / editor / converter (VST3 + Standalone).
 # Scope canon: docs/SCOUT_v2_SPEC.md. Naming contract: CLAUDE.md §"Naming
 # contract". PLUGIN_CODE and PRODUCT_NAME freeze at the first Cubase load.
-project(Sf2Scout VERSION 0.6.0 LANGUAGES C CXX)
+project(Sf2Scout VERSION 0.6.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,9 +17,28 @@ endif()
 # Vendored libopenmpt 0.8.9 (BSD-3, third_party/libopenmpt/LICENSE). We compile
 # the internal soundlib (OpenMPT::CSoundFile) as a static library and read
 # ModSample directly -- the public libopenmpt API exposes no sample PCM or loop
-# flags. No zlib/mpg123/vorbis: MO3 and compressed-sample formats that need
-# them report an error instead of loading; every plain tracker format works.
+# flags. Compressed modules use libopenmpt's own bundled decoders, exactly as
+# its "libopenmpt-small" MSVC project does (include/, from the official
+# libopenmpt-0.8.9+release.msvc.zip, sha256 8d3b3c14...6d32bea): miniz (MIT,
+# zipped modules .mdz/.s3z/.xmz/.itz), minimp3 (CC0, MP3 samples in MO3) and
+# stb_vorbis (PD/MIT, Vorbis samples in MO3 / OGG-XM). No zlib, mpg123 or
+# libvorbis. Licences: include/*/LICENSE and the stb_vorbis.c header.
 set(OPENMPT_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/third_party/libopenmpt/libopenmpt-0.8.9)
+
+# The three decoders compile as their own C library with OpenMPT's per-decoder
+# defines; stb_vorbis must NOT see STB_VORBIS_HEADER_ONLY here (that is for the
+# soundlib side, which includes the .c as a header).
+add_library(openmpt_ext STATIC
+    ${OPENMPT_ROOT}/include/miniz/miniz.c
+    ${OPENMPT_ROOT}/include/minimp3/minimp3.c
+    ${OPENMPT_ROOT}/include/stb_vorbis/stb_vorbis.c)
+target_compile_definitions(openmpt_ext PRIVATE STB_VORBIS_NO_PULLDATA_API STB_VORBIS_NO_STDIO)
+# miniz.h is also used by Source/engine/ModuleSource.cpp (zipped-module unwrap) and the harness.
+target_include_directories(openmpt_ext PUBLIC ${OPENMPT_ROOT}/include)
+if(MSVC)
+    target_compile_options(openmpt_ext PRIVATE /W0)
+    target_compile_definitions(openmpt_ext PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX)
+endif()
 file(GLOB_RECURSE OPENMPT_SOURCES CONFIGURE_DEPENDS
     ${OPENMPT_ROOT}/common/*.cpp
     ${OPENMPT_ROOT}/soundlib/*.cpp
@@ -30,7 +49,12 @@ target_include_directories(openmpt_soundlib PUBLIC
     ${OPENMPT_ROOT}
     ${OPENMPT_ROOT}/src
     ${OPENMPT_ROOT}/common)
+target_include_directories(openmpt_soundlib PRIVATE ${OPENMPT_ROOT}/include)
 target_compile_definitions(openmpt_soundlib PUBLIC LIBOPENMPT_BUILD)
+target_compile_definitions(openmpt_soundlib PRIVATE
+    MPT_WITH_MINIZ MPT_WITH_MINIMP3 MPT_WITH_STBVORBIS
+    STB_VORBIS_HEADER_ONLY STB_VORBIS_NO_PULLDATA_API STB_VORBIS_NO_STDIO)
+target_link_libraries(openmpt_soundlib PUBLIC openmpt_ext)
 target_compile_features(openmpt_soundlib PUBLIC cxx_std_17)
 if(MSVC)
     target_compile_options(openmpt_soundlib PRIVATE /W3 /wd4244 /wd4267 /wd4996 /bigobj)
@@ -49,7 +73,7 @@ set(SCOUT_ENGINE_SOURCES
 # Engine harness (validator.json dsp stage). Still JUCE-free: it links only the
 # engine and openmpt_soundlib. Build: cmake --build build --config Release --target test_engine
 add_executable(test_engine tests/test_engine.cpp ${SCOUT_ENGINE_SOURCES})
-target_include_directories(test_engine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+target_include_directories(test_engine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source ${OPENMPT_ROOT}/include)
 target_link_libraries(test_engine PRIVATE openmpt_soundlib)
 target_compile_definitions(test_engine PRIVATE _USE_MATH_DEFINES=1)
 if(MSVC)

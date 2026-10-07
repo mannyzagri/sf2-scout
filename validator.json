@@ -20,7 +20,7 @@
         "expect": [
           "ALL CHECKS PASSED",
           "0 failures",
-          "347 checks, 0 failures",
+          "356 checks, 0 failures",
           "[load]",
           "[authored]",
           "[looponly]",
@@ -47,6 +47,7 @@
           "[unload]",
           "[assists]",
           "[mod-load]",
+          "[mod-compressed]",
           "[mod-play]"
         ]
       }
