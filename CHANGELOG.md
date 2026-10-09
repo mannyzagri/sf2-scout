@@ -2,6 +2,10 @@
 
 Convention: `C:\code-bank\templates\CHANGELOG-convention.md`. Prefix `SC`.
 
+## unreleased — 2026-10-09 — build fix
+### Infra
+- [SC-047] FIX: `third_party/libopenmpt/libopenmpt-0.8.9/build/svn_version/svn_version.h` (verbatim from the release zip) was git-ignored by the `build/` pattern, so a fresh clone (and the code-bank copy BreakForge pulls) did not compile `common/version.cpp`. Tracked now (`.gitignore` negation); no code change.
+
 ## v0.6.1 — 2026-10-07 — MO3 and zipped modules open
 Host impact: reload instance (no param change); Cubase re-scan (version string changed).
 

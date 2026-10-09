@@ -1,5 +1,8 @@
 build/
 build-*/
+# libopenmpt's common/version.cpp includes ../build/svn_version/svn_version.h: that
+# vendored file must be tracked although it lives under a directory named build/.
+!third_party/libopenmpt/libopenmpt-0.8.9/build/
 deps/
 scratch/
 *.exe
